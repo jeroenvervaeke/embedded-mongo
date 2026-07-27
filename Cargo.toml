@@ -1,0 +1,16 @@
+[package]
+name = "embedded-mongodb"
+version = "0.1.0"
+edition = "2024"
+description = "Feasibility spike for a SQLite-like MongoDB client"
+repository = "https://github.com/jeroenvervaeke/embedded-mongo"
+license = "SSPL-1.0"
+publish = false
+exclude = ["mongo"]
+
+[dependencies]
+bson = "3.1.0"
+cxx = "1"
+
+[build-dependencies]
+cxx-build = "1"
