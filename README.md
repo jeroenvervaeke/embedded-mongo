@@ -26,6 +26,22 @@ No server deployment. No ports. No connection string.
 - 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
+## Deployment model
+
+![Traditional MongoDB uses a separate server process; Embedded MongoDB runs inside the application](docs/deployment-model.svg)
+
+<details>
+<summary><strong>Technical implementation</strong></summary>
+
+Commands travel from `bson::Document` through the safe Rust API, CXX bridge, `DBDirectClient`,
+`ServiceEntryPointShardRole`, MongoDB command/query/catalog code, and finally WiredTiger.
+
+MongoDB is pinned as the shallow `mongo/` submodule. The `embedded-mongodb-sys` crate owns the
+native implementation, CXX bridge, and build script; the safe Rust crate builds BSON helpers on
+top. Startup uses a 256 MB WiredTiger cache plus a 64 MB spill cache.
+
+</details>
+
 ## Quick start
 
 Open a directory, insert a document, and query it back:
@@ -47,6 +63,16 @@ Explore the complete runnable examples:
 - [Basic: insert a document](examples/basic.rs)
 - [Typed: model and query a collection](examples/advanced.rs)
 - [Aggregation: build a sales report](examples/aggregation.rs)
+
+## What this unlocks
+
+The embedded deployment model creates a path toward:
+
+- 🖥️ **Local-first applications** with MongoDB data stored beside the app.
+- 🧰 **Self-contained developer tools and CLIs** without a database service to provision.
+- ✈️ **Offline and edge workloads** that keep working without network access.
+- 🧪 **Tests and demos** that start with the application instead of waiting for infrastructure.
+- 🌍 **One engine across ecosystems**, with Rust today and potential Python and JavaScript bindings.
 
 ## Test coverage
 
@@ -74,27 +100,6 @@ One end-to-end integration test covers the operations demonstrated by all three 
   backup, and encryption.
 - **Failure and scale** — crash recovery, stress tests, and large-data workloads.
 - **Portability and upgrades** — packaging, MongoDB upgrades, and non-Linux platforms.
-
-## How it works
-
-Everything runs inside the host process: no `mongod`, child process, listening socket, or MongoDB
-wire protocol.
-
-```mermaid
-flowchart LR
-    subgraph process["Your Rust process"]
-        A["bson::Document"] --> B["Safe Rust API"]
-        B --> C["Rust / CXX bridge"]
-        C --> D["DBDirectClient"]
-        D --> E["ServiceEntryPointShardRole"]
-        E --> F["MongoDB commands, queries, and catalog"]
-    end
-    F --> G[("WiredTiger files")]
-```
-
-MongoDB is pinned as the shallow `mongo/` submodule. The `embedded-mongodb-sys` crate owns the
-native implementation, CXX bridge, and build script; the safe Rust crate builds BSON helpers on
-top. Startup uses a 256 MB WiredTiger cache plus a 64 MB spill cache.
 
 ## Observability
 
