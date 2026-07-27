@@ -18,7 +18,10 @@ No server deployment. No ports. No connection string.
 - 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
 - 🍃 **MongoDB data model** — use BSON documents, filters, cursors, aggregation pipelines, and
   direct commands.
-- 🦀 **Rust-native API** — work with typed Serde collections or raw MongoDB documents.
+- 🦀 **Rust-native today, multi-language tomorrow** — work with typed Serde collections or raw
+  MongoDB documents.
+  - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
+  - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
 - 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
