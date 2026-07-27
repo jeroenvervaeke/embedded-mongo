@@ -18,7 +18,19 @@ struct embedded_mongodb_buffer {
     std::size_t len;
 };
 
-EMBEDDED_MONGODB_API int embedded_mongodb_initialize(char** error) noexcept;
+typedef void (*embedded_mongodb_log_callback)(std::int32_t severity,
+                                               std::int32_t id,
+                                               const char* component,
+                                               std::size_t component_len,
+                                               const char* context,
+                                               std::size_t context_len,
+                                               const char* message,
+                                               std::size_t message_len,
+                                               const char* record,
+                                               std::size_t record_len) noexcept;
+
+EMBEDDED_MONGODB_API int embedded_mongodb_initialize(
+    embedded_mongodb_log_callback log_callback, char** error) noexcept;
 
 EMBEDDED_MONGODB_API int embedded_mongodb_open(const char* path,
                                                 std::size_t path_len,
