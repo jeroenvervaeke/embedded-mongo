@@ -1,3 +1,7 @@
+[workspace]
+members = ["embedded-mongodb-sys"]
+resolver = "3"
+
 [package]
 name = "embedded-mongodb"
 version = "0.1.0"
@@ -9,8 +13,16 @@ publish = false
 exclude = ["mongo"]
 
 [dependencies]
-bson = "3.1.0"
-cxx = "1"
+bson = { version = "3.1.0", features = ["serde"] }
+embedded-mongodb-sys = { path = "embedded-mongodb-sys" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 
-[build-dependencies]
-cxx-build = "1"
+[dev-dependencies]
+anyhow = "1"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+tempfile = "3"
+
+[[bench]]
+name = "operations"
+harness = false

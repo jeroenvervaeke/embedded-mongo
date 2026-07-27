@@ -6,16 +6,12 @@ Linux feasibility spike for using MongoDB like SQLite from Rust:
 use embedded_mongodb::{Client, bson::doc};
 
 let client = Client::new("./data")?;
-let reply = client.run_command(
-    "app",
-    &doc! {
-        "insert": "items",
-        "documents": [{"_id": 1, "name": "embedded"}],
-    },
-)?;
-assert_eq!(reply.get_i32("n")?, 1);
+let items = client.database("app").collection("items");
+let inserted = items.insert_one(doc! { "name": "embedded" })?;
+let item = items.find_one(doc! { "_id": inserted.inserted_id })?;
+assert_eq!(item.unwrap().get_str("name")?, "embedded");
 client.close()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+# Ok::<(), anyhow::Error>(())
 ```
 
 This prototype does not start `mongod`, create a child process, open a listening socket, or use the
@@ -34,22 +30,48 @@ bson::Document
 
 - MongoDB is pinned as the shallow `mongo/` submodule.
 - `Client::new(path)` starts WiredTiger inside the caller's process.
+- `database(name)` and `collection::<T>(name)` return cheap handles without performing I/O.
+- Collections support typed `insert_one`, `insert_many`, `find_one`, batched `find`, and aggregation
+  pipelines.
 - `run_command(database, document)` accepts and returns BSON documents.
-- The test inserts a document, cleanly closes the engine, reopens the same directory, and finds the
-  persisted document.
+- Missing `_id` fields receive an `ObjectId`, matching the official drivers.
+- A `Client` can be shared across threads; its native `ClientStrand` safely serializes commands.
+- The test covers typed operations, concurrent calls, cursor `getMore`, command errors, and
+  persistence across close/reopen.
 - Startup is bounded to a 256 MB WiredTiger cache plus a 64 MB spill cache.
 - One runtime may be active per process; sequential close/reopen is supported.
 
-The bridge intentionally exposes one raw command operation. Collection-specific Rust wrappers can
-be added after the supported command surface is known.
+The `embedded-mongodb-sys` crate owns the native implementation, CXX bridge, and build script. It
+exposes one raw command operation; the safe Rust crate builds BSON helpers on top.
 
-## Example
+## Examples
 
-[`examples/basic.rs`](examples/basic.rs) opens a directory, inserts a document, queries it, and
-closes the engine:
+[`examples/basic.rs`](examples/basic.rs) opens a temporary directory and inserts one document:
 
 ```sh
-cargo run --release --example basic -- ./example-data
+cargo run --release --example basic
+```
+
+[`examples/advanced.rs`](examples/advanced.rs) chains typed batch inserts, a filtered cursor, and an
+insert followed by `find_one`:
+
+```sh
+cargo run --release --example advanced
+```
+
+[`examples/aggregation.rs`](examples/aggregation.rs) builds a product sales report from nested
+orders with a multi-stage aggregation pipeline:
+
+```sh
+cargo run --release --example aggregation
+```
+
+## Benchmark
+
+Criterion measures open, `insert_one`, `find_one`, and close separately:
+
+```sh
+cargo bench --bench operations
 ```
 
 ## Build and test
@@ -63,24 +85,16 @@ git submodule update --init --depth 1
 cd mongo
 python3.13 buildscripts/install_bazel.py
 export PATH="$HOME/.local/bin:$PATH"
-
-CC=gcc-14 CXX=g++-14 bazel build \
-  @mongot_localdev//:libembedded_mongodb_native.so \
-  --override_repository=mongot_localdev="$(cd .. && pwd)/native" \
-  --config=native_toolchain \
-  --compiler_type=gcc \
-  --disable_warnings_as_errors=True \
-  --copt=-include \
-  --copt=sys/syscall.h \
-  --copt=-fPIC
-
 cd ..
 cargo test
 ```
 
-`build.rs` looks for
-`mongo/bazel-bin/external/mongot_localdev/libembedded_mongodb_native.so`. Set
-`EMBEDDED_MONGODB_NATIVE_LIB_DIR` when the library is copied elsewhere.
+`embedded-mongodb-sys/build.rs` runs the pinned Bazel target and rebuilds it incrementally when
+the native sources change. Set `BAZEL` to use a Bazel executable outside `PATH`, or set
+`EMBEDDED_MONGODB_NATIVE_LIB_DIR` to skip Bazel and use a prebuilt library. Native compilation is
+limited to eight parallel jobs by default; override it with `EMBEDDED_MONGODB_BAZEL_JOBS`.
+Cargo-run tests and examples find it through the sys crate's build output; standalone binaries
+still need the shared library in the platform loader path.
 
 The current fast-build shared library is about 1.4 GB. Size optimization and packaging are not part
 of this spike.
@@ -113,12 +127,13 @@ fatal process behavior that are unsuitable for a library.
   lifecycle and Bazel dependency work.
 - Many server components assume one global runtime. Multiple simultaneous `Client` values or
   different active database directories are rejected.
+- Commands issued through one `Client` are thread-safe but serialized, not run in parallel.
 - There is no process isolation: a MongoDB fatal invariant, memory fault, or abort terminates the
   Rust host.
-- Only `insert`, `find`, clean shutdown, and recovery are covered. Authentication, replication,
-  transactions, change streams, TTL, backup, encryption, and the wider command set are not yet
-  supported claims.
-- The current bridge is Linux-specific (`.so`, ELF startup initialization, and rpath handling).
+- Only `insert`, `find`, aggregation, clean shutdown, and recovery are covered. Authentication,
+  replication, transactions, change streams, TTL, backup, encryption, and the wider command set
+  are not yet supported claims.
+- The current bridge is Linux-specific (`.so` loading and ELF startup initialization).
 - MongoDB server code is SSPL-1.0. Distribution or service use requires a license review; see
   [`LICENSE-Community.txt`](mongo/LICENSE-Community.txt).
 
