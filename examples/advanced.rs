@@ -1,3 +1,5 @@
+// cargo run --release --example advanced
+
 use anyhow::Result;
 use embedded_mongodb::{
     Client,

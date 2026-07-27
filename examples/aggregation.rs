@@ -1,3 +1,5 @@
+// cargo run --release --example aggregation
+
 use anyhow::Result;
 use embedded_mongodb::{Client, bson::doc};
 
