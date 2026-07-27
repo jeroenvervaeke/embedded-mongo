@@ -1,4 +1,4 @@
-#include "embedded-mongodb/bridge.h"
+#include "embedded-mongodb-sys/src/ffi.rs.h"
 
 #include <stdexcept>
 #include <string>
@@ -18,9 +18,27 @@ void throw_if_error(int status, char* error) {
     throw std::runtime_error(message);
 }
 
+void forward_log(std::int32_t severity,
+                 std::int32_t id,
+                 const char* component,
+                 std::size_t componentLen,
+                 const char* context,
+                 std::size_t contextLen,
+                 const char* message,
+                 std::size_t messageLen,
+                 const char* record,
+                 std::size_t recordLen) noexcept {
+    emit_mongodb_log(severity,
+                     id,
+                     rust::Str(component, componentLen),
+                     rust::Str(context, contextLen),
+                     rust::Str(message, messageLen),
+                     rust::Str(record, recordLen));
+}
+
 const std::string initializerError = [] {
     char* error = nullptr;
-    const auto status = embedded_mongodb_initialize(&error);
+    const auto status = embedded_mongodb_initialize(&forward_log, &error);
     std::string message;
     if (status != 0) {
         message = error ? error : "failed to initialize embedded MongoDB";
