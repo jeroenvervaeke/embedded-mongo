@@ -1,6 +1,8 @@
 # Embedded MongoDB
 
-**A Linux feasibility spike for using MongoDB like SQLite from Rust.**
+**MongoDB queries, aggregation, and WiredTiger storage—embedded directly in your Rust process.**
+
+No server. No socket. No wire protocol.
 
 > [!WARNING]
 > **Proof of concept.** This project was created by
@@ -23,23 +25,6 @@ client.close()?;
 # Ok::<(), anyhow::Error>(())
 ```
 
-## How it works
-
-Everything runs inside the host process: no `mongod`, child process, listening socket, or MongoDB
-wire protocol.
-
-```mermaid
-flowchart LR
-    subgraph process["Your Rust process"]
-        A["bson::Document"] --> B["Safe Rust API"]
-        B --> C["Rust / CXX bridge"]
-        C --> D["DBDirectClient"]
-        D --> E["ServiceEntryPointShardRole"]
-        E --> F["MongoDB commands, queries, and catalog"]
-    end
-    F --> G[("WiredTiger files")]
-```
-
 ## Features
 
 - ⚡ **Runs in-process** — `Client::new(path)` starts WiredTiger without `mongod` or a socket.
@@ -54,36 +39,6 @@ flowchart LR
   serializes commands safely.
 - 📦 **Bounded caches** — startup uses a 256 MB WiredTiger cache plus a 64 MB spill cache.
 - 📌 **Reproducible engine** — MongoDB is pinned as the shallow `mongo/` submodule.
-
-The `embedded-mongodb-sys` crate owns the native implementation, CXX bridge, and build script. It
-exposes one raw command operation; the safe Rust crate builds BSON helpers on top.
-
-## Test coverage
-
-### ✅ Tested
-
-- **Lifecycle and persistence** — open, clean close, reopen, and persistence on disk.
-- **Documents and typing** — BSON and Serde-backed values, generated `ObjectId`s, `insert_one`, and
-  `insert_many`.
-- **Queries and cursors** — filtered `find`, `find_one`, array matching, comparison operators, and
-  batched cursor `getMore`.
-- **Commands** — `ping` through the public BSON `run_command` API.
-- **Aggregation** — a multi-stage product report using `$match`, `$unwind`, `$group`, arithmetic,
-  `$sort`, and `$project`.
-- **Concurrency and errors** — `Client: Send + Sync`, concurrent inserts, and structured
-  duplicate-key errors.
-- **Observability** — MongoDB-to-`tracing` severity mapping.
-
-One end-to-end integration test covers the operations demonstrated by all three examples.
-
-### ⚠️ Not tested
-
-- **Wider command set** — commands beyond those exercised by the covered helpers and `ping`.
-- **Cursor cancellation** — early cursor drop and its `killCursors` cleanup path.
-- **Advanced MongoDB features** — authentication, replication, transactions, change streams, TTL,
-  backup, and encryption.
-- **Failure and scale** — crash recovery, stress tests, and large-data workloads.
-- **Portability and upgrades** — packaging, MongoDB upgrades, and non-Linux platforms.
 
 ## Examples
 
@@ -278,6 +233,53 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## Test coverage
+
+### ✅ Tested
+
+- **Lifecycle and persistence** — open, clean close, reopen, and persistence on disk.
+- **Documents and typing** — BSON and Serde-backed values, generated `ObjectId`s, `insert_one`, and
+  `insert_many`.
+- **Queries and cursors** — filtered `find`, `find_one`, array matching, comparison operators, and
+  batched cursor `getMore`.
+- **Commands** — `ping` through the public BSON `run_command` API.
+- **Aggregation** — a multi-stage product report using `$match`, `$unwind`, `$group`, arithmetic,
+  `$sort`, and `$project`.
+- **Concurrency and errors** — `Client: Send + Sync`, concurrent inserts, and structured
+  duplicate-key errors.
+- **Observability** — MongoDB-to-`tracing` severity mapping.
+
+One end-to-end integration test covers the operations demonstrated by all three examples.
+
+### ⚠️ Not tested
+
+- **Wider command set** — commands beyond those exercised by the covered helpers and `ping`.
+- **Cursor cancellation** — early cursor drop and its `killCursors` cleanup path.
+- **Advanced MongoDB features** — authentication, replication, transactions, change streams, TTL,
+  backup, and encryption.
+- **Failure and scale** — crash recovery, stress tests, and large-data workloads.
+- **Portability and upgrades** — packaging, MongoDB upgrades, and non-Linux platforms.
+
+## How it works
+
+Everything runs inside the host process: no `mongod`, child process, listening socket, or MongoDB
+wire protocol.
+
+```mermaid
+flowchart LR
+    subgraph process["Your Rust process"]
+        A["bson::Document"] --> B["Safe Rust API"]
+        B --> C["Rust / CXX bridge"]
+        C --> D["DBDirectClient"]
+        D --> E["ServiceEntryPointShardRole"]
+        E --> F["MongoDB commands, queries, and catalog"]
+    end
+    F --> G[("WiredTiger files")]
+```
+
+The `embedded-mongodb-sys` crate owns the native implementation, CXX bridge, and build script. It
+exposes one raw command operation; the safe Rust crate builds BSON helpers on top.
 
 ## Observability
 
