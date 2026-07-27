@@ -2,7 +2,10 @@
 
 **The MongoDB version of SQLite.**
 
-One process. One local directory. Familiar MongoDB documents, queries, and aggregations.
+The real MongoDB engine, embedded directly in your application.
+
+One process. One local directory. MongoDB's own queries, aggregations, commands, and WiredTiger
+storage.
 
 No server deployment. No ports. No connection string.
 
@@ -13,11 +16,12 @@ No server deployment. No ports. No connection string.
 
 ## Features
 
-**Keep the MongoDB document model. Drop the database-service ceremony.**
+**Not a MongoDB-compatible reimplementation. MongoDB's actual server code runs inside your
+process.**
 
+- 🍃 **Real MongoDB execution** — queries, cursors, aggregation pipelines, commands, and storage
+  run through MongoDB's own engine, backed by WiredTiger.
 - 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
-- 🍃 **MongoDB data model** — use BSON documents, filters, cursors, aggregation pipelines, and
-  direct commands.
 - 🦀 **Rust-native today, multi-language tomorrow** — work with typed Serde collections or raw
   MongoDB documents.
   - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
