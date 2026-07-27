@@ -28,7 +28,10 @@ No server deployment. No ports. No connection string.
 
 ## Deployment model
 
-![Traditional MongoDB uses a separate server process; Embedded MongoDB runs inside the application](docs/deployment-model.svg)
+![Traditional MongoDB uses a separate server process; Embedded MongoDB runs inside the application while keeping an exchangeable native MongoDB data directory](docs/deployment-model.svg)
+
+The directory uses MongoDB's native on-disk format. After a clean shutdown, hand it between
+`embedded-mongodb` and the matching pinned `mongod` build; only one process may own it at a time.
 
 <details>
 <summary><strong>Technical implementation</strong></summary>
@@ -99,7 +102,8 @@ One end-to-end integration test covers the operations demonstrated by all three 
 - **Advanced MongoDB features** — authentication, replication, transactions, change streams, TTL,
   backup, and encryption.
 - **Failure and scale** — crash recovery, stress tests, and large-data workloads.
-- **Portability and upgrades** — packaging, MongoDB upgrades, and non-Linux platforms.
+- **Portability and upgrades** — automated `mongod` handoff, packaging, MongoDB upgrades, and
+  non-Linux platforms.
 
 ## Observability
 

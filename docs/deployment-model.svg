@@ -1,9 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 610" role="img" aria-labelledby="title description">
   <title id="title">Traditional MongoDB deployment compared with Embedded MongoDB</title>
   <desc id="description">
     Traditional MongoDB runs the application and mongod as separate processes connected over the
     network. Embedded MongoDB places the MongoDB engine inside the application process and writes
-    directly to one local data directory.
+    directly to one local data directory. After a clean shutdown, the native MongoDB data
+    directory can move between Embedded MongoDB and the matching pinned mongod build.
   </desc>
 
   <defs>
@@ -18,10 +19,10 @@
     </marker>
   </defs>
 
-  <rect width="1200" height="520" rx="24" fill="#f8fafc"/>
+  <rect width="1200" height="610" rx="24" fill="#f8fafc"/>
   <text x="600" y="52" text-anchor="middle" fill="#0f172a"
         font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="700">
-    Same document model. One less service.
+    Same MongoDB data. One less service.
   </text>
 
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
@@ -102,6 +103,17 @@
     <rect x="753" y="435" width="288" height="38" rx="19" fill="#ecfdf5" stroke="#a7f3d0"/>
     <text x="897" y="460" text-anchor="middle" fill="#047857" font-size="15" font-weight="700">
       1 process · 1 local directory
+    </text>
+
+    <rect x="210" y="516" width="780" height="68" rx="18" fill="#ecfdf5" stroke="#34d399"
+          stroke-width="2"/>
+    <path d="M250 550 H310" fill="none" stroke="#059669" stroke-width="3"
+          marker-start="url(#arrow-green)" marker-end="url(#arrow-green)"/>
+    <text x="340" y="544" fill="#065f46" font-size="18" font-weight="700">
+      Native MongoDB data directory
+    </text>
+    <text x="340" y="567" fill="#047857" font-size="14">
+      embedded-mongodb ↔ pinned mongod · clean shutdown · one owner at a time
     </text>
   </g>
 </svg>
