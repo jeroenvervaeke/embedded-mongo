@@ -10,6 +10,16 @@ deploying a database server.
 > [Jeroen Vervaeke](https://github.com/jeroenvervaeke). It is experimental, Linux-only, not
 > production-ready, and not supported by MongoDB.
 
+## Features
+
+- 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
+- 🍃 **MongoDB data model** — use BSON documents, filters, cursors, aggregation pipelines, and
+  direct commands.
+- 🦀 **Rust-native API** — work with typed Serde collections or raw MongoDB documents.
+- 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
+- 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
+- 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
+
 ## Quick start
 
 No server process, listening socket, or connection string:
@@ -24,17 +34,7 @@ let item = items.find_one(doc! { "_id": inserted.inserted_id })?;
 println!("{item:?}");
 ```
 
-## Features
-
-- 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
-- 🍃 **MongoDB data model** — use BSON documents, filters, cursors, aggregation pipelines, and
-  direct commands.
-- 🦀 **Rust-native API** — work with typed Serde collections or raw MongoDB documents.
-- 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
-- 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
-
-## Examples
+### Full examples
 
 Explore the complete runnable examples:
 
