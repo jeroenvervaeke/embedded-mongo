@@ -2,8 +2,9 @@
 
 **The MongoDB version of SQLite.**
 
-Point it at a local directory and use familiar MongoDB documents, queries, and aggregations—without
-deploying a database server.
+One process. One local directory. Familiar MongoDB documents, queries, and aggregations.
+
+No server deployment. No ports. No connection string.
 
 > [!WARNING]
 > **Proof of concept.** This project was created by
@@ -11,6 +12,8 @@ deploying a database server.
 > production-ready, and not supported by MongoDB.
 
 ## Features
+
+**Keep the MongoDB document model. Drop the database-service ceremony.**
 
 - 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
 - 🍃 **MongoDB data model** — use BSON documents, filters, cursors, aggregation pipelines, and
@@ -22,7 +25,7 @@ deploying a database server.
 
 ## Quick start
 
-No server process, listening socket, or connection string:
+Open a directory, insert a document, and query it back:
 
 ```rust
 use embedded_mongodb::bson::doc;
@@ -38,9 +41,9 @@ println!("{item:?}");
 
 Explore the complete runnable examples:
 
-- [Insert a document](examples/basic.rs)
-- [Use typed collections](examples/advanced.rs)
-- [Run an aggregation pipeline](examples/aggregation.rs)
+- [Basic: insert a document](examples/basic.rs)
+- [Typed: model and query a collection](examples/advanced.rs)
+- [Aggregation: build a sales report](examples/aggregation.rs)
 
 ## Test coverage
 
