@@ -66,6 +66,13 @@ orders with a multi-stage aggregation pipeline:
 cargo run --release --example aggregation
 ```
 
+## Tracing
+
+MongoDB logs are emitted through `tracing` under the `embedded_mongodb::mongo` target. Events carry
+the MongoDB ID, component, context, severity, and lossless JSON record; open, command, and close
+operations add spans. Without a subscriber the library remains silent. The basic example installs
+`tracing-subscriber`.
+
 ## Benchmark
 
 Criterion measures open, `insert_one`, `find_one`, and close separately:

@@ -2,6 +2,10 @@ use anyhow::Result;
 use embedded_mongodb::{Client, bson::doc};
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
     // The database files are deleted when this temporary directory is dropped.
     let data_directory = tempfile::tempdir()?;
     let client = Client::new(data_directory.path())?;
