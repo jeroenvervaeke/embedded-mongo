@@ -1,0 +1,1 @@
+workspace(name = "embedded_mongodb_native")
