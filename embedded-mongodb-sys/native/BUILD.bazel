@@ -63,6 +63,7 @@ cc_binary(
         "@//src/mongo/db/commands:standalone",
         "@//src/mongo/db/index_builds:index_builds_coordinator_mongod",
         "@//src/mongo/db/op_observer",
+        "@//src/mongo/db/pipeline/process_interface:mongod_process_interface_factory",
         "@//src/mongo/db/repl:replmocks",
         "@//src/mongo/db/rss:persistence_provider_impl",
         "@//src/mongo/db/rss:service_lifecycle_impl",
