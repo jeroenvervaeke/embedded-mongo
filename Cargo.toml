@@ -1,5 +1,5 @@
 [workspace]
-members = ["embedded-mongodb-sys"]
+members = ["embedded-mongodb-python", "embedded-mongodb-sys"]
 resolver = "3"
 
 [package]

@@ -123,6 +123,9 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         .arg("--config=native_toolchain")
         .arg(format!("--compiler_type={compiler_type}"))
         .arg(format!("--local_resources=cpu={jobs}"))
+        // Python loads extension modules after process startup. TCMalloc's static TLS cannot
+        // reliably be allocated that late, so the shared library must use the system allocator.
+        .arg("--//bazel/config:allocator=system")
         .arg("--disable_warnings_as_errors=True")
         .arg("--copt=-include")
         .arg("--copt=sys/syscall.h")
