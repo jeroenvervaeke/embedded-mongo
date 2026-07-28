@@ -71,6 +71,53 @@ Explore the complete runnable examples:
 - [Typed: model and query a collection](examples/advanced.rs)
 - [Aggregation: build a sales report](examples/aggregation.rs)
 
+## Python
+
+The `pymongo-embedded` package keeps PyMongo's API for remote servers and routes embedded URIs to
+the in-process engine:
+
+```py
+from pymongo_embedded import MongoClient
+
+remote = MongoClient("mongodb://localhost:27017/")
+local = MongoClient("mongodb_embedded://./data")
+
+local.app.items.insert_one({"name": "embedded"})
+```
+
+`mongodb+embedded://./data` is the URI-valid spelling and behaves identically.
+
+Run the included [Python example](examples/python/basic.py) with:
+
+```sh
+./scripts/python
+```
+
+The runner creates a clean environment under `.cache/python`, builds incrementally, and uses the
+sibling `mongo-python-driver` checkout. It also accepts normal Python arguments:
+
+```sh
+./scripts/python -i              # Open a Python shell.
+./scripts/python your_script.py
+./scripts/python -m pip install another-package
+```
+
+Set `PYMONGO_SOURCE` if the PyMongo checkout is elsewhere.
+
+To build a distributable wheel containing the native engine:
+
+```sh
+python -m pip install "maturin[patchelf]"
+maturin build --release
+python -m pip install target/wheels/pymongo_embedded-*.whl
+```
+
+The first build compiles the pinned MongoDB submodule.
+
+The initial binding supports synchronous PyMongo 4.18 commands, including normal CRUD, cursors,
+aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,
+transactions, change streams, exhaust cursors, and async PyMongo are not supported.
+
 ## What this unlocks
 
 The embedded deployment model creates a path toward:

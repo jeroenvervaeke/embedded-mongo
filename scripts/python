@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+environment=${PYMONGO_EMBEDDED_ENV:-"$repo_root/.cache/python"}
+pymongo_source=${PYMONGO_SOURCE:-"$repo_root/../mongo-python-driver"}
+python_bin=${PYTHON_BIN:-python3}
+
+if [ ! -f "$pymongo_source/pymongo/__init__.py" ]; then
+    echo "PyMongo source not found at $pymongo_source; set PYMONGO_SOURCE" >&2
+    exit 1
+fi
+if [ ! -x "$environment/venv/bin/python" ]; then
+    "$python_bin" -m venv "$environment/venv"
+fi
+
+cargo build --release -p embedded-mongodb-python --manifest-path "$repo_root/Cargo.toml"
+
+package="$environment/site/pymongo_embedded"
+mkdir -p "$package"
+for source in __init__.py client.py pool.py; do
+    ln -sfn "$repo_root/python/pymongo_embedded/$source" "$package/$source"
+done
+
+native_dir="$repo_root/mongo/bazel-bin/external/mongot_localdev"
+case $(uname -s) in
+    Darwin)
+        extension="$repo_root/target/release/lib_native.dylib"
+        export DYLD_LIBRARY_PATH="$native_dir${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        ;;
+    *)
+        extension="$repo_root/target/release/lib_native.so"
+        export LD_LIBRARY_PATH="$native_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        ;;
+esac
+ln -sfn "$extension" "$package/_native.abi3.so"
+
+export PYTHONPATH="$environment/site:$pymongo_source${PYTHONPATH:+:$PYTHONPATH}"
+if [ "$#" -eq 0 ]; then
+    set -- "$repo_root/examples/python/basic.py"
+fi
+exec "$environment/venv/bin/python" "$@"
