@@ -52,6 +52,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CC");
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=EMBEDDED_MONGODB_BAZEL_JOBS");
+    println!("cargo:rerun-if-env-changed=PROFILE");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed=cpp/bridge.cc");
     println!("cargo:rerun-if-changed=include/embedded-mongodb/bridge.h");
@@ -92,16 +94,32 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
             }
         })
         .unwrap_or("gcc");
+    let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
 
     eprintln!("building embedded MongoDB with Bazel");
-    let status = Command::new(&bazel)
+    let mut command = Command::new(&bazel);
+    command
         .current_dir(&mongo_root)
         .arg("build")
         .arg("@mongot_localdev//:libembedded_mongodb_native.so")
         .arg(format!(
             "--override_repository=mongot_localdev={}",
             crate_root.join("native").display()
-        ))
+        ));
+    if release {
+        command.args([
+            "--config=opt",
+            "--fission=no",
+            "--debug_symbols=False",
+            "--copt=-fvisibility=hidden",
+        ]);
+        match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+            Ok("linux") => command.arg("--linkopt=-Wl,-z,defs,--strip-all"),
+            Ok("macos") => command.arg("--linkopt=-Wl,-x"),
+            _ => &mut command,
+        };
+    }
+    let status = command
         .arg("--config=native_toolchain")
         .arg(format!("--compiler_type={compiler_type}"))
         .arg(format!("--local_resources=cpu={jobs}"))
