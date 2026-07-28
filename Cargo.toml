@@ -6,7 +6,7 @@ resolver = "3"
 name = "embedded-mongodb"
 version = "0.1.0"
 edition = "2024"
-description = "Feasibility spike for a SQLite-like MongoDB client"
+description = "SQLite-like embedded MongoDB client"
 repository = "https://github.com/jeroenvervaeke/embedded-mongo"
 license = "SSPL-1.0"
 publish = false
@@ -28,3 +28,7 @@ tracing-subscriber = "0.3"
 [[bench]]
 name = "operations"
 harness = false
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

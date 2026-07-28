@@ -10,9 +10,9 @@ storage.
 No server deployment. No ports. No connection string.
 
 > [!WARNING]
-> **Proof of concept.** This project was created by
-> [Jeroen Vervaeke](https://github.com/jeroenvervaeke). It is experimental, Linux-only, not
-> production-ready, and not supported by MongoDB.
+> **Experimental.** This project was created by
+> [Jeroen Vervaeke](https://github.com/jeroenvervaeke). It is not production-ready or supported by
+> MongoDB.
 
 ## Features
 
@@ -106,8 +106,7 @@ One end-to-end integration test covers the operations demonstrated by all three 
 - **Advanced MongoDB features** — authentication, replication, transactions, change streams, TTL,
   backup, and encryption.
 - **Failure and scale** — crash recovery, stress tests, and large-data workloads.
-- **Portability and upgrades** — automated `mongod` handoff, packaging, MongoDB upgrades, and
-  non-Linux platforms.
+- **Portability and upgrades** — automated `mongod` handoff, MongoDB upgrades, and Windows.
 
 ## Observability
 
@@ -126,8 +125,8 @@ cargo bench --bench operations
 
 ## Build and test
 
-MongoDB's pinned build requires Python 3.13, Bazel, C++20, lld, and a supported compiler. Its build
-documentation currently lists GCC 14.2 or Clang 19.1 and roughly 13 GB of free space.
+MongoDB's pinned build requires Python 3.13, Bazel, C++20, and a supported compiler and linker. Its
+build documentation currently lists GCC 14.2 or Clang 19.1 and roughly 13 GB of free space.
 
 ```sh
 git submodule update --init --depth 1
@@ -146,8 +145,8 @@ limited to eight parallel jobs by default; override it with `EMBEDDED_MONGODB_BA
 Cargo-run tests and examples find it through the sys crate's build output; standalone binaries
 still need the shared library in the platform loader path.
 
-The current fast-build shared library is about 1.4 GB. Size optimization and packaging are not part
-of this spike.
+- **Release:** about 141 MB and optimized.
+- **Debug:** about 1.4 GB.
 
 ## Hard constraints
 
@@ -160,10 +159,10 @@ of this spike.
   Rust host.
 - Authentication, replication, transactions, change streams, TTL, backup, encryption, and the
   wider command set are outside the current supported scope.
-- The current bridge is Linux-specific (`.so` loading and ELF startup initialization).
+- Linux and macOS are tested; Windows is untested.
 - This project embeds MongoDB Community Server as a modified work first published on 2026-07-27
   and licensed as a whole under SSPL-1.0. Distribution or service use requires a license review;
   see [`LICENSE`](LICENSE).
 
 Production use would require owning a MongoDB fork, a narrow supported command matrix, crash
-testing, packaging, and upgrade work.
+testing, and upgrade work.
