@@ -5,6 +5,10 @@ cc_binary(
     srcs = [
         "embedded_mongodb_native.cpp",
         "embedded_mongodb_native.h",
+        # Built with ssl=False, which drops the TLS stack this library has no use for.
+        # MongoDB still references SSLPeerInfo::forSession from client.h and the
+        # authentication commands, so its definition has to come along.
+        "@//src/mongo/util/net:ssl_peer_info.cpp",
         # Mongo's auto-header scanner cannot see injected-repository sources.
         "@//src/mongo/base/.auto_header:initializer_h",
         "@//src/mongo/bson/.auto_header:bson_validate_h",
