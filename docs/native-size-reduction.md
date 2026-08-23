@@ -2,7 +2,7 @@
 
 Goal: ship the engine inside a Java library. Target 25 MB, hard ceiling 50 MB.
 
-The release library is **42,394,688 bytes**, down from 147,116,136 when this work started
+The release library is **42,317,408 bytes**, down from 147,116,136 when this work started
 (−71%). It is under the 50 MB ceiling. No engine functionality was removed to get there:
 the only thing dropped is collation data for 85 locales, and only in the patched build.
 
@@ -10,12 +10,13 @@ Two configurations are supported, and both pass `cargo test --release --all-targ
 
 | | Size | vs. previous round |
 | --- | --- | --- |
-| Build flags only | 44,962,880 | −17.1% |
-| With the patch in `patches/` | **42,394,688** | −21.8% |
+| Build flags only | 44,885,600 | −17.2% |
+| With the patches in `patches/` | **42,317,408** | −21.9% |
 
-All sizes are bytes from `stat -c%s`, on `x86_64-linux`, gcc 16.1.1, GNU ld 2.46, lld 22.1.6,
-glibc 2.43. Earlier rounds were measured on gcc 16.2.1 / lld 22.1.8, which produces a library
-about 165 KB smaller; the two are not interchangeable to the byte.
+All sizes are bytes from `stat -c%s`, on `x86_64-linux`, gcc 16.2.1, GNU ld 2.46, lld 22.1.8,
+glibc 2.43. The intermediate steps below were measured on gcc 16.1.1, before a system upgrade
+moved the toolchain mid-round; 16.2.1 produces a library about 160 KB smaller, so the rows do
+not chain to the byte.
 
 ## Where the size went
 
@@ -30,19 +31,18 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | `ssl=False`, `build_otel=False`, `build_enterprise=False` | 54,050,888 | −7.9 MB |
 | — rebuilt here on gcc 16.1.1 — | 54,216,296 | |
 | `--version-script`, exporting only the five entry points | 52,496,088 | −1.72 MB |
-| GCC LTO, linked with `ld.bfd` | 44,962,880 | −7.53 MB |
-| ICU collation trim (`patches/0001`) | **42,394,688** | −2.57 MB |
+| GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
+| ICU collation trim (`patches/0001`) | **42,317,408** | −2.57 MB |
 
 By section:
 
 | | Before | After |
 | --- | --- | --- |
-| `.text` | 30,578,530 | 24,586,927 |
-| `.rodata` | 14,147,808 | 10,823,648 |
-| `.eh_frame` | 3,174,648 | 2,611,124 |
-| `.gcc_except_table` | 1,882,743 | 1,065,316 |
-| `.data.rel.ro` | 1,676,208 | 1,631,256 |
-| `.plt` | 47,968 | 8,768 |
+| `.text` | 30,578,530 | 24,504,175 |
+| `.rodata` | 14,147,808 | 10,827,168 |
+| `.eh_frame` | 3,174,648 | 2,611,716 |
+| `.gcc_except_table` | 1,882,743 | 1,065,236 |
+| `.data.rel.ro` | 1,676,208 | 1,630,768 |
 
 ## Export only what the library is for
 
@@ -108,7 +108,8 @@ submodule (`MODULE.bazel:287-292`, SERVER-122886).
 
 ## The patch: ICU collation data
 
-`patches/0001-trim-icu-collation-locales.patch`, applied with `scripts/apply-mongo-patches`.
+`patches/0001-trim-icu-collation-locales.patch`, applied with `scripts/apply-mongo-patches`
+together with `patches/0002`, which fixes a crash described further down.
 
 `icudt57l.dat` is 3,372,768 bytes compiled into the library as a byte array by
 `generate_icu_init_cpp.py`, and it is the single largest object in the link. It holds 114
@@ -200,25 +201,82 @@ removed.
 Add `-Wl,-Map=/tmp/link.map` for per-object attribution. The map is ~116 MB; aggregate it on
 the `_objs/<target>/` path component rather than reading it.
 
-## What is left
+## What is left, and why cutting subsystems does not work
 
-After ICU (now 0.8 MB), Intel decimal128 (2.07 MB) and WiredTiger (1.94 MB), no remaining bazel
-target exceeds 2.3 MB and the rest is spread over hundreds of targets. By directory the
-largest are `src/mongo/db` 5.16 MB, `db/pipeline` 3.85 MB, sharding 3.40 MB, SBE 2.85 MB,
-`db/repl` 1.69 MB.
+The obvious next step is to remove what an embedded single-node engine cannot use: the
+slot-based execution engine, sharding, replication, authentication, the network stack. Those
+were each measured, and the answer is that build configuration cannot deliver any of them.
 
-In rough order of value:
+Their ceilings are real. Dropping each subsystem's objects from the LTO link while permitting
+the resulting dangling references, against a 42,317,408 baseline:
 
-1. **SBE**, per above — the only remaining candidate over 2 MB.
+| Cut | Result | Ceiling |
+| --- | --- | --- |
+| SBE | 36,960,704 | −5.36 MB |
+| sharding + routing | 37,581,824 | −4.74 MB |
+| replication | 40,108,256 | −2.21 MB |
+| network stack | 41,073,280 | −1.24 MB |
+| auth + crypto | 41,330,624 | −0.99 MB |
+
+Those are ceilings, not savings, and three separate mechanisms fail to reach them.
+
+**Dropping unreferenced objects buys almost nothing**, because LTO already did it. Rebuilding
+each subsystem's minimal link-clean subset — drop the whole thing, add back only the objects
+that define symbols the link then reports undefined — leaves 120 of SBE's 126 objects in place,
+worth 22,624 bytes. Sharding is the exception at −2.97 MB, and that is pre-LTO; LTO collects the
+same code.
+
+**Following the reference cascade destroys the engine.** Seeding SBE's 126 objects and
+repeatedly adding every object that references something already dropped converges on **481
+objects**, including 80 in core `src/mongo/db`, 91 in `db/s` and 22 in `db/commands`.
+
+**Constant-folding the engine choice does nothing.** `QueryKnobConfiguration` reaches the
+executor through one generated accessor, so shadowing it with a constant `kForceClassicEngine`
+makes every engine-choice branch provably dead and should let LTO strip SBE for free. It
+rebuilt 158 translation units and produced a library of *exactly the same size*, because SBE
+stays reachable through the plan cache, `plan_executor_factory` and explain. Forcing the
+classic engine at runtime costs query performance and saves nothing, so it was reverted too.
+
+What would work is a fork. Only 23 objects outside SBE reference it, and most are themselves
+SBE-specific (`plan_executor_sbe`, `plan_explainer_sbe`, `sbe_trial_runtime_executor`, the
+deferred-engine-choice planners); the genuinely shared ones are about nine files that branch on
+the engine and would have to be patched to take the classic path unconditionally. Note that
+five of the 23 are histogram and cardinality-estimation files using `sbe::value` purely as a
+data representation, so `sbe_values` has to stay whatever else goes.
+
+That is a fork of MongoDB's query execution layer, carried against a pinned submodule,
+re-applied on every bump, in the code path this crate's users exercise most. The other four
+subsystems each need their own, and sharding's is worse because `shard_role` is on every
+collection access. Worth roughly 14 MB if all five landed. Not attempted.
+
+Below that, no remaining bazel target exceeds 2.3 MB. By directory the largest are
+`src/mongo/db` 5.16 MB, `db/pipeline` 3.85 MB, sharding 3.40 MB, SBE 2.85 MB, `db/repl`
+1.69 MB. Intel decimal128 is 2.07 MB and WiredTiger 1.94 MB, both required.
 
 25 MB still means cutting the query engine, and with it
 `embedded_mongodb::Collection::aggregate` from this crate's public API.
+
+## Two crashes this work found
+
+Neither was caused by the size work; both predate it, and `tests/features.rs` covers them now.
+Both took the host process down with an fassert rather than returning an error, which is the
+worst failure mode a library embedded in someone else's application can have.
+
+- **`explain`** reports server version information, and nothing had ever called
+  `VersionInfoInterface::enable()`. mongod gets it from a static initializer in
+  `//src/mongo/util:version_impl`, which `native/BUILD.bazel` did not depend on. Adding the dep
+  fixes it.
+- **The first `hello`** — `Client::getRemote()` verifies that a session exists, and a client
+  created in-process has none. Recording client metadata logs the remote address, so the first
+  handshake aborted; later ones succeeded because metadata is only recorded once.
+  `patches/0002` guards the two logging sites in `client_metadata.cpp` and the one in
+  `hello_auth.cpp`. This is what a driver sends first, so it hit the PyMongo bindings directly.
 
 ## Reproducing
 
 ```sh
 git submodule update --init --depth 1
-./scripts/apply-mongo-patches          # optional; worth 2.57 MB
+./scripts/apply-mongo-patches          # 2.57 MB, plus a crash fix
 cargo build --release
 ```
 

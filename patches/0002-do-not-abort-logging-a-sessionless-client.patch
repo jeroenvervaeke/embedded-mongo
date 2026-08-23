@@ -1,0 +1,49 @@
+--- a/src/mongo/rpc/metadata/client_metadata.cpp
++++ b/src/mongo/rpc/metadata/client_metadata.cpp
+@@ -420,6 +420,17 @@
+     return _documentWithoutMongosInfo.get(_document);
+ }
+ 
++namespace {
++/**
++ * Client::getRemote() verifies that a session exists. A client created in-process by an
++ * embedded server has none, so asking it for a remote address aborts the whole process -- on
++ * the first hello, which is the first thing a driver sends. Logging must not be what does that.
++ */
++HostAndPort clientRemoteOrEmpty(Client* client) {
++    return client->hasRemote() ? client->getRemote() : HostAndPort();
++}
++}  // namespace
++
+ void ClientMetadata::logClientMetadata(Client* client) const {
+     if (getDocument().isEmpty()) {
+         return;
+@@ -440,7 +451,7 @@
+ 
+     LOGV2(51800,
+           "client metadata",
+-          "remote"_attr = client->getRemote(),
++          "remote"_attr = clientRemoteOrEmpty(client),
+           "client"_attr = client->desc(),
+           "negotiatedCompressors"_attr = negotiatedCompressorNames,
+           "doc"_attr = getDocument());
+@@ -503,7 +514,7 @@
+     LOGV2_DEBUG(51817,
+                 severity.toInt(),
+                 "client metadata",
+-                "remote"_attr = client->getRemote(),
++                "remote"_attr = clientRemoteOrEmpty(client),
+                 "client"_attr = client->desc(),
+                 "auth"_attr = authenticated,
+                 "doc"_attr = updateDoc);
+--- a/src/mongo/db/repl/hello/hello_auth.cpp
++++ b/src/mongo/db/repl/hello/hello_auth.cpp
+@@ -44,7 +44,7 @@
+         auto metadata = ClientMetadata::get(client);
+         LOGV2(10483900,
+               "Connection not authenticating",
+-              "client"_attr = client->getRemote(),
++              "client"_attr = client->hasRemote() ? client->getRemote() : HostAndPort(),
+               "doc"_attr = metadata ? metadata->getDocument() : BSONObj());
+     }
+ 

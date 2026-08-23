@@ -101,5 +101,10 @@ cc_binary(
         "@//src/mongo/rpc",
         "@//src/mongo/s:startup_initialization",
         "@//src/mongo/util:periodic_runner_factory",
+        # Registers the build's version information. Without it any command that
+        # reports serverInfo -- explain, among others -- fasserts with "Terminating
+        # because valid version info has not been configured" and aborts the host
+        # process rather than returning an error.
+        "@//src/mongo/util:version_impl",
     ],
 )

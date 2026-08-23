@@ -198,8 +198,9 @@ still need the shared library in the platform loader path.
 The release build is size-optimized rather than speed-optimized: `-Os`, link-time optimization,
 per-function and per-data sections with `--gc-sections`, packed relative relocations, only the
 five `extern "C"` entry points exported, and no TLS, gRPC, OpenTelemetry or enterprise modules.
-Run `./scripts/apply-mongo-patches` before building to also trim the embedded ICU collation
-tables, which is worth a further 2.6 MB. See
+Run `./scripts/apply-mongo-patches` before building: it trims the embedded ICU collation
+tables, worth a further 2.6 MB, and fixes an assertion that aborted the host process on the
+first `hello` a driver sends. See
 [`docs/native-size-reduction.md`](docs/native-size-reduction.md) for the measurements and
 what further reduction would cost. Packed relative relocations require glibc 2.36 or newer.
 LTO is linked with `ld.bfd`, which must be on `PATH`; lld cannot read GCC's IR.
