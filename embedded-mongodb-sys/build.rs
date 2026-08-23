@@ -109,9 +109,8 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     if release {
         // MongoDB marks nearly every cc_library `alwayslink`, so the linker is handed every
         // object and can only drop whole sections it proves unreachable. Per-function and
-        // per-data sections give it that granularity; --gc-sections then removes the server
-        // code this library never reaches, and --icf folds the duplicate template
-        // instantiations C++ leaves behind.
+        // per-data sections give it that granularity, and --gc-sections then removes the
+        // server code this library never reaches.
         command.args([
             "--config=opt",
             // Size, not speed, is the binding constraint on a library that ships inside
@@ -131,9 +130,27 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         ]);
         match env::var("CARGO_CFG_TARGET_OS").as_deref() {
             Ok("linux") => command.args([
+                // Optimizing across the whole engine at link time is worth 7.4 MB. GCC puts
+                // its IR in the object files and only a linker carrying GCC's plugin can
+                // read it: lld has no such plugin, and handed these objects it links a
+                // 3.9 KB library and reports success. The toolchain appends -fuse-ld=lld
+                // after the linkopts below, so its features have to be switched off rather
+                // than overridden.
+                "--copt=-flto",
+                "--linkopt=-flto=4",
+                "--linkopt=-Os",
+                "--linkopt=-fuse-ld=bfd",
+                "--features=-linker_lld",
+                "--features=-default_linker_lld",
+                // bfd does not understand --start-lib.
+                "--features=-supports_start_end_lib",
                 "--linkopt=-Wl,-z,defs,--strip-all",
                 "--linkopt=-Wl,--gc-sections",
-                "--linkopt=-Wl,--icf=all",
+                // No --icf=all here: bfd has no identical code folding. It was worth 2.6 MB
+                // against lld before LTO, but nothing after it -- linking these objects with
+                // mold, which does fold, changes the library by 256 bytes. GCC's -fipa-icf
+                // has already found all of it.
+                //
                 // DT_RELR packs the millions of relative relocations a PIC library of this
                 // size accumulates; needs glibc 2.36 or newer at runtime.
                 "--linkopt=-Wl,-z,pack-relative-relocs",

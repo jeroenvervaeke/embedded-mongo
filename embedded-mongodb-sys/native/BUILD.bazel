@@ -61,6 +61,18 @@ cc_binary(
         "-I$(GENDIR)/src",
         "-Isrc",
     ],
+    additional_linker_inputs = select({
+        "@platforms//os:linux": ["export.map"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        # The engine is reached through the five extern "C" entry points in
+        # embedded_mongodb_native.h. Every other exported symbol is a --gc-sections root, and
+        # the third-party libraries mark their API visibility("default") in their own headers,
+        # so -fvisibility=hidden still left 5915 of them exported. Hiding them is worth 1.7 MB.
+        "@platforms//os:linux": ["-Wl,--version-script=$(location export.map)"],
+        "//conditions:default": [],
+    }),
     linkshared = True,
     deps = [
         "@//src/mongo/bson:bson_validate",
