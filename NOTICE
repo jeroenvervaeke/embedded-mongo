@@ -1,0 +1,61 @@
+Embedded MongoDB
+================
+
+This work embeds MongoDB Community Server as a modified work. It is licensed as
+a whole under the Server Side Public License, Version 1 (SSPL-1.0); see LICENSE
+for the full text. It is not a product of, or supported by, MongoDB, Inc.
+
+MongoDB is a registered trademark of MongoDB, Inc. Its use here is descriptive
+and does not imply endorsement or affiliation.
+
+First published as a modified work on 2026-07-27.
+
+
+Corresponding source
+--------------------
+
+Complete corresponding source for every binary published alongside this notice
+is the repository below, at the commit named in the release. That repository
+does not vendor the engine: it pins it as a submodule and carries the
+modifications as patch files, so reproducing a published binary needs all three
+of the pieces listed here.
+
+    This work        https://github.com/jeroenvervaeke/embedded-mongo
+
+    Upstream engine  https://github.com/mongodb/mongo
+    Pinned commit    e08eb5e22f1658f5074139e535efb9c68c15c41c
+
+    Modifications    patches/ in this repository, applied to the submodule by
+                     scripts/apply-mongo-patches:
+
+                       0001  trim the embedded ICU collation locales
+                       0002  do not abort when logging a sessionless client
+                       0003  remove the slot-based execution engine
+                       0004  drop the replication implementation
+                       0005  drop the sharding runtime
+                       0006  drop the network stack
+
+                     Further modifications live in
+                     embedded-mongodb-sys/native/, which supplies the library's
+                     entry points and its standalone sharding state.
+
+    Build            embedded-mongodb-sys/build_native.rs holds the exact Bazel
+                     invocation, and docs/native-size-reduction.md explains what
+                     each flag and patch is for. Reproduce with
+                     EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo build --release.
+
+
+Offering this as a service
+--------------------------
+
+Section 13 of the SSPL attaches to anyone who makes the functionality of this
+program, or a modified version of it, available to third parties as a service.
+Read the license before doing so.
+
+
+Third-party components
+----------------------
+
+The engine statically links the third-party libraries upstream MongoDB uses.
+THIRD-PARTY-NOTICES, taken from the pinned submodule and published beside each
+binary, lists them and their licenses.
