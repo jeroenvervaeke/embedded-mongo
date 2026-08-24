@@ -41,12 +41,30 @@ fn main() {
     }
     symlink(&native_library, &runtime_library).expect("failed to link native library into OUT_DIR");
 
-    cxx_build::bridge("src/ffi.rs")
+    // Half of the C++ runtime story; the native library covers the other half through its
+    // own link flags. Without this the cxx bridge puts a `NEEDED libstdc++.so.6` on every
+    // artifact that links it -- the Python extension module included -- which pins the
+    // wheel's GLIBCXX floor to whichever toolchain happened to build it.
+    let static_libstdcxx = (env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu"))
+    .then(static_libstdcxx_dir)
+    .flatten();
+    let mut bridge = cxx_build::bridge("src/ffi.rs");
+    bridge
         .file("cpp/bridge.cc")
         .include("include")
         .include("native")
-        .std("c++20")
-        .compile("embedded-mongodb-cxx");
+        .std("c++20");
+    if static_libstdcxx.is_some() {
+        bridge.cpp_link_stdlib(None);
+    }
+    bridge.compile("embedded-mongodb-cxx");
+    if let Some(directory) = static_libstdcxx {
+        // Emitted after compile(), so the archive that needs these symbols precedes them on
+        // the link line.
+        println!("cargo:rustc-link-search=native={}", directory.display());
+        println!("cargo:rustc-link-lib=static=stdc++");
+    }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=dylib=embedded_mongodb_native");
@@ -72,4 +90,26 @@ fn main() {
         "cargo:rerun-if-changed={}",
         workspace_root.join("mongo/.bazelrc").display()
     );
+}
+
+/// Directory holding `libstdc++.a`, or `None` when the toolchain ships no static C++
+/// runtime. `rustc` searches its own link paths rather than the compiler's internal library
+/// directory, so the location has to be handed to it explicitly. Distributions differ on
+/// where it lives -- and some ship only the shared library -- so ask the compiler.
+fn static_libstdcxx_dir() -> Option<PathBuf> {
+    let compiler = env::var("CXX").unwrap_or_else(|_| "c++".into());
+    let output = Command::new(compiler)
+        .arg("-print-file-name=libstdc++.a")
+        .output()
+        .ok()?;
+    // A compiler that cannot find the file echoes the bare name back.
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    if !output.status.success() || !path.is_file() {
+        println!(
+            "cargo:warning=embedded-mongodb: no static libstdc++ found; linking it \
+             dynamically, which ties this build to the host's GLIBCXX version"
+        );
+        return None;
+    }
+    Some(path.parent()?.to_path_buf())
 }

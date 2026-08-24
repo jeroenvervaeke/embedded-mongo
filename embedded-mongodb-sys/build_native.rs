@@ -95,6 +95,14 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
                 // DT_RELR packs the millions of relative relocations a PIC library of this
                 // size accumulates; needs glibc 2.36 or newer at runtime.
                 "--linkopt=-Wl,-z,pack-relative-relocs",
+                // The published library is built by whichever toolchain CI happens to run,
+                // so a dynamic libstdc++ would let its GLIBCXX and CXXABI floor move with
+                // the runner image -- and GCC 14 already emits the highest versions
+                // manylinux_2_39 permits, leaving no headroom. Safe here because export.map
+                // limits the surface to five extern "C" entry points, so no C++ type or
+                // exception crosses the boundary. Costs about 2.4 MB.
+                "--linkopt=-static-libstdc++",
+                "--linkopt=-static-libgcc",
             ]),
             "macos" => command.args([
                 "--linkopt=-Wl,-x",
