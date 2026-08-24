@@ -5,6 +5,9 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Everything that decides what the native library contains.
+include!("build_native.rs");
+
 const NATIVE_LIBRARY: &str = "libembedded_mongodb_native.so";
 
 fn main() {
@@ -69,118 +72,4 @@ fn main() {
         "cargo:rerun-if-changed={}",
         workspace_root.join("mongo/.bazelrc").display()
     );
-}
-
-fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
-    let mongo_root = workspace_root.join("mongo");
-    assert!(
-        mongo_root.join(".bazelversion").is_file(),
-        "MongoDB submodule is missing; run `git submodule update --init --depth 1`"
-    );
-
-    let bazel = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
-    let jobs = env::var("EMBEDDED_MONGODB_BAZEL_JOBS").unwrap_or_else(|_| "8".into());
-    assert!(
-        jobs.parse::<usize>().is_ok_and(|jobs| jobs > 0),
-        "EMBEDDED_MONGODB_BAZEL_JOBS must be a positive integer"
-    );
-    let compiler_type = env::var("CXX")
-        .or_else(|_| env::var("CC"))
-        .map(|compiler| {
-            if compiler.contains("clang") {
-                "clang"
-            } else {
-                "gcc"
-            }
-        })
-        .unwrap_or("gcc");
-    let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
-
-    eprintln!("building embedded MongoDB with Bazel");
-    let mut command = Command::new(&bazel);
-    command
-        .current_dir(&mongo_root)
-        .arg("build")
-        .arg("@mongot_localdev//:libembedded_mongodb_native.so")
-        .arg(format!(
-            "--override_repository=mongot_localdev={}",
-            crate_root.join("native").display()
-        ));
-    if release {
-        // MongoDB marks nearly every cc_library `alwayslink`, so the linker is handed every
-        // object and can only drop whole sections it proves unreachable. Per-function and
-        // per-data sections give it that granularity, and --gc-sections then removes the
-        // server code this library never reaches.
-        command.args([
-            "--config=opt",
-            // Size, not speed, is the binding constraint on a library that ships inside
-            // someone else's application bundle.
-            "--//bazel/config:opt=size",
-            // An in-process engine has no network, so the TLS stack and the gRPC/protobuf
-            // tree behind it are dead weight, as are OpenTelemetry export and the
-            // enterprise-only modules.
-            "--//bazel/config:ssl=False",
-            "--//bazel/config:build_otel=False",
-            "--//bazel/config:build_enterprise=False",
-            "--fission=no",
-            "--debug_symbols=False",
-            "--copt=-fvisibility=hidden",
-            "--copt=-ffunction-sections",
-            "--copt=-fdata-sections",
-        ]);
-        match env::var("CARGO_CFG_TARGET_OS").as_deref() {
-            Ok("linux") => command.args([
-                // Optimizing across the whole engine at link time is worth 7.4 MB. GCC puts
-                // its IR in the object files and only a linker carrying GCC's plugin can
-                // read it: lld has no such plugin, and handed these objects it links a
-                // 3.9 KB library and reports success. The toolchain appends -fuse-ld=lld
-                // after the linkopts below, so its features have to be switched off rather
-                // than overridden.
-                "--copt=-flto",
-                "--linkopt=-flto=4",
-                "--linkopt=-Os",
-                "--linkopt=-fuse-ld=bfd",
-                "--features=-linker_lld",
-                "--features=-default_linker_lld",
-                // bfd does not understand --start-lib.
-                "--features=-supports_start_end_lib",
-                "--linkopt=-Wl,-z,defs,--strip-all",
-                "--linkopt=-Wl,--gc-sections",
-                // No --icf=all here: bfd has no identical code folding. It was worth 2.6 MB
-                // against lld before LTO, but nothing after it -- linking these objects with
-                // mold, which does fold, changes the library by 256 bytes. GCC's -fipa-icf
-                // has already found all of it.
-                //
-                // DT_RELR packs the millions of relative relocations a PIC library of this
-                // size accumulates; needs glibc 2.36 or newer at runtime.
-                "--linkopt=-Wl,-z,pack-relative-relocs",
-            ]),
-            Ok("macos") => command.args(["--linkopt=-Wl,-x", "--linkopt=-Wl,-dead_strip"]),
-            _ => &mut command,
-        };
-    }
-    let status = command
-        .arg("--config=native_toolchain")
-        .arg(format!("--compiler_type={compiler_type}"))
-        .arg(format!("--local_resources=cpu={jobs}"))
-        // Python loads extension modules after process startup. TCMalloc's static TLS cannot
-        // reliably be allocated that late, so the shared library must use the system allocator.
-        .arg("--//bazel/config:allocator=system")
-        .arg("--disable_warnings_as_errors=True")
-        .arg("--copt=-include")
-        .arg("--copt=sys/syscall.h")
-        .arg("--copt=-fPIC")
-        .status()
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to run {}: {error}; install Bazel with \
-                 `python3.13 mongo/buildscripts/install_bazel.py` or set BAZEL",
-                PathBuf::from(&bazel).display()
-            )
-        });
-    assert!(status.success(), "Bazel native build failed with {status}");
-
-    mongo_root
-        .join("bazel-bin/external/mongot_localdev")
-        .join(NATIVE_LIBRARY)
 }
