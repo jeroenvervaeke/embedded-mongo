@@ -1,0 +1,910 @@
+--- a/src/mongo/executor/BUILD.bazel
++++ b/src/mongo/executor/BUILD.bazel
+@@ -168,8 +168,6 @@
+         "//src/mongo/db:server_feature_flags",
+         "//src/mongo/db/auth",
+         "//src/mongo/db/commands/server_status:server_status_core",
+-        "//src/mongo/transport:transport_layer",
+-        "//src/mongo/transport:transport_layer_manager",
+     ],
+ )
+ 
+@@ -185,7 +183,6 @@
+         "//src/mongo/client:async_client",
+         "//src/mongo/db/auth",
+         "//src/mongo/db/commands/server_status:server_status_core",
+-        "//src/mongo/transport:transport_layer",
+     ],
+ )
+ 
+@@ -431,7 +428,6 @@
+         "network_interface_integration_fixture.cpp",
+     ],
+     deps = [
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/rpc:command_status",
+@@ -472,7 +468,6 @@
+         "pinned_connection_task_executor",
+         "thread_pool_task_executor_test_fixture",
+         "//src/mongo/client:authentication",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/client:remote_command_targeter_mock",
+         "//src/mongo/db:service_context_test_fixture",
+         "//src/mongo/db/auth:auth_mechanism",
+@@ -525,13 +520,11 @@
+         "network_interface_tl",
+         "task_executor_cursor",
+         "//src/mongo/client:async_client",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:wire_version",
+         "//src/mongo/db/commands:kill_operations_idl",
+         "//src/mongo/db/commands/server_status:server_status_metric",
+         "//src/mongo/db/query/client_cursor:cursor_response_idl",
+         "//src/mongo/db/query/write_ops:write_ops_parsers",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:pinned_connection_task_executor",
+         "//src/mongo/executor:thread_pool_task_executor",
+--- a/src/mongo/dbtests/BUILD.bazel
++++ b/src/mongo/dbtests/BUILD.bazel
+@@ -43,7 +43,6 @@
+         "//src/mongo/dbtests/mock:mock_replica_set.cpp",
+     ],
+     deps = [
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client:dbclient_mockcursor",
+         "//src/mongo/client:replica_set_monitor_test_helper",
+         "//src/mongo/db:query_expressions",
+@@ -141,7 +140,6 @@
+         "mocklib",
+         "testframework",
+         "//src/mongo/bson/dotted_path:dotted_path_support",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client:replica_set_monitor_protocol_test_util",
+         "//src/mongo/db:index_key_validate",
+         "//src/mongo/db:mongohasher",
+@@ -198,7 +196,6 @@
+         "//src/mongo/shell:shell_utils",
+         "//src/mongo/transport:message_compressor_options_server",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:clock_source_mock",
+         "//src/mongo/util:password",
+         "//src/mongo/util:processinfo",
+--- a/src/mongo/db/BUILD.bazel
++++ b/src/mongo/db/BUILD.bazel
+@@ -549,7 +549,6 @@
+     deps = [
+         ":service_context",
+         "//src/mongo:base",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:task_executor_interface",
+         "//src/mongo/executor:thread_pool_task_executor",
+     ],
+@@ -1767,7 +1766,6 @@
+     ],
+     deps = [
+         ":service_context",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db/auth:authmocks",
+         "//src/mongo/db/query/query_settings:query_settings_service",
+         "//src/mongo/transport:session_manager",
+@@ -2024,7 +2022,6 @@
+         "//src/mongo/db/repl:replica_set_messages",
+         "//src/mongo/db/repl/hello:topology_version_observer",
+         "//src/mongo/executor:connection_pool_controllers",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:task_executor_interface",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/rpc:message",
+@@ -2352,7 +2349,6 @@
+         "//src/mongo/db/shard_role/lock_manager:exception_util",
+         "//src/mongo/db/transaction",
+         "//src/mongo/executor:inline_executor",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:task_executor_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/util/concurrency:thread_pool",
+@@ -2577,7 +2573,6 @@
+         # please add that library here, as a private library dependency.
+         ":landlock",
+         "//src/mongo/executor:async_rpc_error_info",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/logv2/log_metric_initializer",
+         "//src/mongo/rpc",
+         "//src/mongo/s/commands:cluster_commands",
+@@ -2585,7 +2580,6 @@
+         "//src/mongo/s/commands:sharded_cluster_sharding_commands",
+         "//src/mongo/transport:message_compressor_options_server",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:assert_util_params",
+         "//src/mongo/util:clock_sources",
+         "//src/mongo/util:elapsed_tracker",
+@@ -2810,7 +2804,6 @@
+         "//src/mongo/transport:ingress_handshake_metrics",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:allocator_thread",
+         "//src/mongo/util:buildinfo",
+         "//src/mongo/util/cmdline_utils",
+@@ -3607,7 +3600,6 @@
+         "//src/mongo/db/query/client_cursor:exhaust_cursor_currentop_integration_test.cpp",
+     ],
+     deps = [
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/executor:network_interface_fixture",
+         "//src/mongo/rpc:message",
+         "//src/mongo/transport:transport_layer_egress_init",
+--- a/src/mongo/client/BUILD.bazel
++++ b/src/mongo/client/BUILD.bazel
+@@ -293,11 +293,9 @@
+         "//src/mongo/db/commands:test_commands_enabled",
+         "//src/mongo/executor:connection_pool_stats",
+         "//src/mongo/executor:network_interface",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/transport:message_compressor",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:background_job",
+         "//src/mongo/util:md5",
+         "//src/mongo/util/net:network",
+@@ -487,7 +485,6 @@
+     ],
+     deps = [
+         ":replica_set_monitor_protocol_test_util",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client/sdam:sdam_test_util",
+         "//src/mongo/util/net:network",
+     ],
+@@ -699,7 +696,6 @@
+     deps = [
+         ":clientdriver_network",
+         "//src/mongo/db:wire_version",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/transport:transport_layer_egress_init",
+--- a/src/mongo/transport/BUILD.bazel
++++ b/src/mongo/transport/BUILD.bazel
+@@ -416,7 +416,6 @@
+         ":transport_layer_manager",
+         ":transport_layer_mock",
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:dbmessage",
+         "//src/mongo/db:service_context_test_fixture",
+         "//src/mongo/db/auth:authmocks",
+--- a/src/mongo/shell/BUILD.bazel
++++ b/src/mongo/shell/BUILD.bazel
+@@ -151,7 +151,6 @@
+         ":shell_options_storage",
+         "//src/mongo/base:environment_buffer",
+         "//src/mongo/bson/column",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:mongohasher",
+         "//src/mongo/db:traffic_reader",
+         "//src/mongo/db/auth:security_token_auth",
+@@ -409,7 +408,6 @@
+     deps = [
+         # NOTE: If you need to add a static or mongo initializer to mongo startup,
+         # please add that library here, as a private library dependency.
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client:connection_string",
+         "//src/mongo/db:index_key_validate",
+         "//src/mongo/db:mongohasher",
+@@ -426,14 +424,12 @@
+         "//src/mongo/db:traffic_reader",
+         "//src/mongo/db/views:resolved_view",
+         "//src/mongo/executor:async_rpc_error_info",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/rpc:message",
+         "//src/mongo/scripting",
+         "//src/mongo/transport:message_compressor",
+         "//src/mongo/transport:message_compressor_options_client",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util/net:http_client_impl",
+         "//src/mongo/util/net:network",
+         "//src/mongo/util/options_parser:options_parser_init",
+@@ -484,7 +480,6 @@
+         # mongo_initializers.
+         "//src/mongo/s:grid",
+         "//src/mongo/s/write_ops:batch_write_types",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:allocator_thread",
+         "//src/mongo/util/net:ssl_manager",
+         "//src/mongo/util:pcre_wrapper",
+--- a/src/mongo/scripting/BUILD.bazel
++++ b/src/mongo/scripting/BUILD.bazel
+@@ -104,7 +104,6 @@
+             ":scripting_none",
+         ],
+         "//conditions:default": [
+-            "//src/mongo/client:clientdriver_network",
+             "//src/mongo/db:service_context",
+             "//src/mongo/db/auth:security_token_auth",
+             "//src/mongo/scripting/mozjs/common:mozjs_common",
+--- a/src/mongo/s/BUILD.bazel
++++ b/src/mongo/s/BUILD.bazel
+@@ -155,7 +155,6 @@
+     ],
+     deps = [
+         ":common_s",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:read_write_concern_defaults",
+         "//src/mongo/db:server_base",
+         "//src/mongo/db/exec:scoped_timer",
+@@ -502,7 +501,6 @@
+         "//src/mongo/logv2/log_metric_initializer",
+         "//src/mongo/transport:message_compressor_options_server",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:assert_util_params",
+         "//src/mongo/util:clock_sources",
+         "//src/mongo/util/net:http_client_impl",
+@@ -599,7 +597,6 @@
+         # please add that library as a private libdep of
+         # mongos_initializers.
+         "//src/mongo/db:startup_check_rseq",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/db:audit",
+         "//src/mongo/db/auth:authserver",
+         "//src/mongo/db:change_stream_options_manager",
+@@ -626,7 +623,6 @@
+         "//src/mongo/transport:ingress_handshake_metrics",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:allocator_thread",
+         "//src/mongo/util:periodic_runner_factory",
+         "//src/mongo/util:signal_handlers",
+--- a/src/mongo/rpc/BUILD.bazel
++++ b/src/mongo/rpc/BUILD.bazel
+@@ -247,7 +247,6 @@
+     ],
+     deps = [
+         ":message",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/transport:transport_layer_egress_init",
+         "//src/mongo/util:version_impl",
+     ],
+--- a/src/mongo/replay/BUILD.bazel
++++ b/src/mongo/replay/BUILD.bazel
+@@ -28,7 +28,6 @@
+     ],
+     deps = [
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:traffic_reader",
+         "//src/mongo/db/query/util:stop_token",
+         "//src/mongo/db/shard_role/lock_manager",
+--- a/src/mongo/otel/metrics/instrumentation/BUILD.bazel
++++ b/src/mongo/otel/metrics/instrumentation/BUILD.bazel
+@@ -228,7 +228,6 @@
+     deps = [
+         "//src/mongo/db:service_context",
+         "//src/mongo/otel/metrics:otel_metrics_service",
+-        "//src/mongo/transport:transport_layer",
+         "//src/mongo/util:periodic_runner",
+     ],
+ )
+@@ -240,7 +239,6 @@
+     deps = [
+         ":connections_metrics",
+         "//src/mongo/otel/metrics:metrics_test_util",
+-        "//src/mongo/transport:transport_layer",
+         "//src/mongo/unittest",
+     ],
+ )
+--- a/src/mongo/db/storage/BUILD.bazel
++++ b/src/mongo/db/storage/BUILD.bazel
+@@ -708,7 +708,6 @@
+         "//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
+         "//src/mongo/db/storage/wiredtiger:wiredtiger_record_store_test_harness",
+         "//src/mongo/db/timeseries:timeseries_options",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_mock",
+         "//src/mongo/util:clock_source_mock",
+         "//src/mongo/util:periodic_runner_factory",
+--- a/src/mongo/db/session/BUILD.bazel
++++ b/src/mongo/db/session/BUILD.bazel
+@@ -188,7 +188,6 @@
+         ":sessions_collection",
+         "//src/mongo:base",
+         "//src/mongo/client:authentication",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/db:dbdirectclient",
+         "//src/mongo/db/repl:repl_coordinator_interface",
+         "//src/mongo/db/shard_role/lock_manager",
+--- a/src/mongo/db/s/query_analysis_writer.cpp
++++ b/src/mongo/db/s/query_analysis_writer.cpp
+@@ -417,88 +417,8 @@
+ }
+ 
+ void QueryAnalysisWriter::onStartup(OperationContext* opCtx) {
+-    if (MONGO_unlikely(disableQueryAnalysisWriter.shouldFail())) {
+-        return;
+-    }
+-
+-    auto serviceContext = getQueryAnalysisWriter.owner(this);
+-    auto periodicRunner = serviceContext->getPeriodicRunner();
+-    invariant(periodicRunner);
+-
+-    std::lock_guard<std::mutex> lk(_mutex);
+-
+-    PeriodicRunner::PeriodicJob queryWriterJob(
+-        "QueryAnalysisQueryWriter",
+-        [this](Client* client) {
+-            if (MONGO_unlikely(disableQueryAnalysisWriterFlusher.shouldFail())) {
+-                return;
+-            }
+-            auto opCtx = client->makeOperationContext();
+-            try {
+-                _flushQueries(opCtx.get());
+-            } catch (const DBException& e) {
+-                LOGV2_WARNING(
+-                    7466204,
+-                    "Query Analysis Query Writer encountered unexpected error, will retry after"
+-                    "gQueryAnalysisWriterIntervalSecs",
+-                    "error"_attr = e.toString());
+-            }
+-        },
+-        Seconds(gQueryAnalysisWriterIntervalSecs.load()),
+-        true /*isKillableByStepdown*/);
+-    _periodicQueryWriter =
+-        std::make_shared<PeriodicJobAnchor>(periodicRunner->makeJob(std::move(queryWriterJob)));
+-    _periodicQueryWriter->start();
+-
+-    PeriodicRunner::PeriodicJob diffWriterJob(
+-        "QueryAnalysisDiffWriter",
+-        [this](Client* client) {
+-            if (MONGO_unlikely(disableQueryAnalysisWriterFlusher.shouldFail())) {
+-                return;
+-            }
+-            auto opCtx = client->makeOperationContext();
+-            try {
+-                _flushDiffs(opCtx.get());
+-            } catch (const DBException& e) {
+-                LOGV2_WARNING(7466201,
+-                              "Query Analysis Diff Writer encountered unexpected error, will retry "
+-                              "after gQueryAnalysisWriterIntervalSecs",
+-                              "error"_attr = e.toString());
+-            }
+-        },
+-        Seconds(gQueryAnalysisWriterIntervalSecs.load()),
+-        true /*isKillableByStepdown*/);
+-    _periodicDiffWriter =
+-        std::make_shared<PeriodicJobAnchor>(periodicRunner->makeJob(std::move(diffWriterJob)));
+-    _periodicDiffWriter->start();
+-
+-    QueryAnalysisWriter::observeQueryAnalysisWriterIntervalSecs.addObserver(
+-        [queryWriter = _periodicQueryWriter,
+-         diffWriter = _periodicDiffWriter](const WriterIntervalSecs& secs) {
+-            try {
+-                queryWriter->setPeriod(Seconds(secs));
+-                diffWriter->setPeriod(Seconds(secs));
+-            } catch (const DBException& ex) {
+-                LOGV2(7891302,
+-                      "Failed to update the periods of the threads for writing sampled queries and "
+-                      "diffs to disk",
+-                      "error"_attr = ex.toStatus());
+-            }
+-        });
+-
+-    _executor = executor::ThreadPoolTaskExecutor::create(
+-        ThreadPool::make({
+-            .poolName = "QueryAnalysisWriterThreadPool",
+-            .threadNamePrefix = "QueryAnalysisWriter-",
+-            .minThreads = static_cast<size_t>(gQueryAnalysisWriterMinThreadPoolSize),
+-            .maxThreads = static_cast<size_t>(gQueryAnalysisWriterMaxThreadPoolSize),
+-            .onCreateThread =
+-                [service = opCtx->getService()](const std::string& threadName) {
+-                    Client::initThread(threadName, service);
+-                },
+-        }),
+-        executor::makeNetworkInterface("QueryAnalysisWriterNetwork"));
+-    _executor->startup();
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no network stack; an embedded engine has no sockets -- see docs/native-size-reduction.md");
+ }
+ 
+ void QueryAnalysisWriter::onShutdown() {
+--- a/src/mongo/db/s/BUILD.bazel
++++ b/src/mongo/db/s/BUILD.bazel
+@@ -304,7 +304,6 @@
+         ":resharding_server_parameters_idl",
+         ":transaction_coordinator",
+         "//src/mongo/client:clientdriver_minimal",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/crypto:encrypted_field_config",
+         "//src/mongo/crypto:fle_crypto",
+         "//src/mongo/db:cloner",
+@@ -512,7 +511,6 @@
+         ":sharding_coord_d",
+         ":transaction_coordinator",
+         "//src/mongo/client:clientdriver_minimal",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/crypto:encrypted_field_config",
+         "//src/mongo/crypto:fle_crypto",
+         "//src/mongo/db:cloner",
+@@ -1102,7 +1100,6 @@
+         ":db_s_shard_server_test_deps",
+         ":sharding_test_helpers",
+         "//src/mongo/executor:mock_async_rpc",
+-        "//src/mongo/executor:network_interface_factory",
+     ],
+ )
+ 
+--- a/src/mongo/db/repl/primary_only_service.cpp
++++ b/src/mongo/db/repl/primary_only_service.cpp
+@@ -327,37 +327,12 @@
+ }
+ 
+ void PrimaryOnlyService::startup(OperationContext* opCtx) {
+-    auto serviceName = getServiceName();
+-    auto limits = getThreadPoolLimits();
+-    auto hookList = std::make_unique<rpc::EgressMetadataHookList>();
+-    hookList->addHook(std::make_unique<rpc::VectorClockMetadataHook>(opCtx->getServiceContext()));
+-
+-    std::lock_guard lk(_mutex);
+-    if (_state == State::kShutdown) {
+-        return;
+-    }
+-
+-    _executor = executor::ThreadPoolTaskExecutor::create(
+-        ThreadPool::make({
+-            .poolName = fmt::format("{}ThreadPool", serviceName),
+-            .threadNamePrefix = fmt::format("{}-", serviceName),
+-            .minThreads = limits.minThreads,
+-            .maxThreads = limits.maxThreads,
+-            .maxIdleThreadAge = limits.maxIdleThreadAge,
+-            .onCreateThread =
+-                [this](const std::string& threadName) {
+-                    Client::initThread(threadName, getGlobalServiceContext()->getService());
+-                    auto client = Client::getCurrent();
+-                    AuthorizationSession::get(*client)->grantInternalAuthorization();
+-                    // Associate this Client with this PrimaryOnlyService
+-                    primaryOnlyServiceStateForClient(client).primaryOnlyService = this;
+-                },
+-        }),
+-        executor::makeNetworkInterface(
+-            fmt::format("{}Network", serviceName), nullptr, std::move(hookList)));
+-    _setHasExecutor(lk);
+-
+-    _executor->startup();
++    // Primary-only services run replication and sharding workflows over the network, and this
++    // build links neither. Nothing should register one; if something does, this is where it
++    // shows up rather than at some later, more confusing point.
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no network stack, so primary-only services cannot run -- "
++             "see docs/native-size-reduction.md");
+ }
+ 
+ void PrimaryOnlyService::onStepUp(const OpTime& stepUpOpTime) {
+--- a/src/mongo/db/repl/oplog_fetcher.cpp
++++ b/src/mongo/db/repl/oplog_fetcher.cpp
+@@ -215,8 +215,10 @@
+       _oplogFetcherRestartDecision(std::move(oplogFetcherRestartDecision)),
+       _onShutdownCallbackFn(onShutdownCallbackFn),
+       _lastFetched(config.initialLastFetched),
+-      _createClientFn(
+-          [] { return std::make_unique<DBClientConnection>(true /* autoReconnect */); }),
++      // No network stack here, so there is no upstream node to fetch an oplog from.
++      _createClientFn([]() -> std::unique_ptr<DBClientConnection> {
++          uasserted(ErrorCodes::IllegalOperation, "this build links no network stack; an embedded engine has no sockets -- see docs/native-size-reduction.md");
++      }),
+       _dataReplicatorExternalState(dataReplicatorExternalState),
+       _enqueueDocumentsFn(enqueueDocumentsFn),
+       _awaitDataTimeout(calculateAwaitDataTimeout(config.replSetConfig)),
+@@ -320,7 +322,8 @@
+     // setSoTimeout takes a double representing the number of seconds for send and receive
+     // timeouts. Thus, we must express the timeout in milliseconds and divide by 1000.0 to get
+     // the number of seconds with a fractional part.
+-    _conn->setSoTimeout(timeout / 1000.0 + oplogNetworkTimeoutBufferSeconds.load());
++    // No network stack, so _conn is never established and there is no socket timeout to
++    // set; the invariant above already fails first if this is ever reached.
+ }
+ 
+ OpTime OplogFetcher::getLastOpTimeFetched() const {
+--- a/src/mongo/db/repl/BUILD.bazel
++++ b/src/mongo/db/repl/BUILD.bazel
+@@ -753,7 +753,6 @@
+         "oplog_interface_remote.cpp",
+     ],
+     deps = [
+-        "//src/mongo/client:clientdriver_network",
+     ],
+ )
+ 
+@@ -777,8 +776,6 @@
+         "//src/mongo/db/commands:test_commands_enabled",
+         "//src/mongo/executor:connection_pool_executor",
+         "//src/mongo/executor:network_interface",
+-        "//src/mongo/executor:network_interface_factory",
+-        "//src/mongo/executor:network_interface_tl",
+     ],
+ )
+ 
+@@ -820,9 +817,7 @@
+         "//src/mongo/db/topology/vector_clock:logical_time_metadata_hook",
+         "//src/mongo/executor:connection_pool_executor",
+         "//src/mongo/executor:network_interface",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+-        "//src/mongo/executor:network_interface_tl",
+         "//src/mongo/executor:scoped_task_executor",
+         "//src/mongo/executor:task_executor_interface",
+         "//src/mongo/executor:thread_pool_task_executor",
+@@ -1024,7 +1019,6 @@
+     ],
+     deps = [
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/util/net:network",
+     ],
+ )
+@@ -1111,7 +1105,6 @@
+         ":repl_server_parameters",
+         ":replica_set_messages",
+         ":replication_auth",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:query_expressions",
+         "//src/mongo/db:server_base",
+         "//src/mongo/db/commands/server_status:server_status_core",
+@@ -1157,7 +1150,6 @@
+         ":replica_set_messages",
+         ":replication_auth",
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:dbhelpers",
+         "//src/mongo/db:query_exec",
+         "//src/mongo/db:read_write_concern_defaults",
+@@ -1326,7 +1318,6 @@
+         ":oplog",
+         ":oplog_fetcher",
+         ":oplog_interface_local",
+-        ":oplog_interface_remote",
+         ":oplog_write_interface",
+         ":repl_coordinator_interface",
+         ":repl_server_parameters",
+@@ -1369,7 +1360,6 @@
+         ":oplog_buffer_batched_queue",
+         ":oplog_buffer_collection",
+         ":oplog_buffer_proxy",
+-        ":oplog_interface_remote",
+         ":oplog_write",
+         ":optime",
+         ":primary_only_service",
+@@ -1382,7 +1372,6 @@
+         ":replication_process",
+         ":replication_recovery",
+         ":reporter",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:change_stream_pre_images_collection_manager",
+         "//src/mongo/db:cloner",
+         "//src/mongo/db:not_primary_error_tracker",
+@@ -1632,7 +1621,6 @@
+         "//src/mongo/db/auth:authorization_manager_global",
+         "//src/mongo/db/repl:repl_server_parameters",
+         "//src/mongo/db/storage:storage_engine_common",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_mock",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+@@ -1968,7 +1956,6 @@
+         "//src/mongo/db/stats:counters",
+         "//src/mongo/db/update:update_test_helpers",
+         "//src/mongo/dbtests:mocklib",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_mock",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor_test_fixture",
+--- a/src/mongo/db/process_health/BUILD.bazel
++++ b/src/mongo/db/process_health/BUILD.bazel
+@@ -38,7 +38,6 @@
+         "//src/mongo/db:service_context",
+         "//src/mongo/db/commands:test_commands_enabled",
+         "//src/mongo/executor:network_interface",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+         "//src/mongo/s:grid",
+@@ -68,10 +67,8 @@
+         ":fault_manager",
+         "//src/mongo:base",
+         "//src/mongo/db:service_context_test_fixture",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:task_executor_test_fixture",
+         "//src/mongo/executor:thread_pool_task_executor_test_fixture",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:clock_source_mock",
+         "//src/mongo/util/concurrency:thread_pool",
+     ],
+--- a/src/mongo/client/sdam/BUILD.bazel
++++ b/src/mongo/client/sdam/BUILD.bazel
+@@ -85,7 +85,6 @@
+     deps = [
+         ":sdam",
+         ":sdam_test_util",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client:replica_set_monitor_protocol_test_util",
+         "//src/mongo/executor:thread_pool_task_executor_test_fixture",
+     ],
+--- a/src/mongo/util/net/BUILD.bazel
++++ b/src/mongo/util/net/BUILD.bazel
+@@ -412,7 +412,6 @@
+         ":ssl_types",
+         "//src/mongo/client:connection_string",
+         "//src/mongo/db:server_options_servers",
+-        "//src/mongo/transport:transport_layer",
+         "//src/mongo/util/cmdline_utils",
+     ],
+ )
+@@ -444,7 +443,6 @@
+         "//src/mongo/db/auth:builtin_roles",
+         "//src/mongo/db/auth:user",
+         "//src/mongo/executor:network_interface",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_fixture",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:thread_pool_task_executor",
+--- a/src/mongo/util/cryptd/BUILD.bazel
++++ b/src/mongo/util/cryptd/BUILD.bazel
+@@ -37,14 +37,11 @@
+         "//src/mongo/db/repl:repl_coordinator_interface",
+         "//src/mongo/db/shard_role:service_context_non_d",
+         "//src/mongo/db/storage:storage_engine_lock_file",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/rpc",
+         "//src/mongo/s:grid",
+         "//src/mongo/transport:message_compressor",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:ntservice",
+         "//src/mongo/util:signal_handlers",
+         "//src/mongo/util:testing_options",
+--- a/src/mongo/transport/handoff/BUILD.bazel
++++ b/src/mongo/transport/handoff/BUILD.bazel
+@@ -48,7 +48,6 @@
+         "//src/mongo/transport:message_filter_hooks",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer",
+         "//src/mongo/transport:transport_layer_common",
+         "//src/mongo/util/net:ssl_manager",
+         "//src/third_party/s2n:s2n-tls",
+--- a/src/mongo/transport/grpc/BUILD.bazel
++++ b/src/mongo/transport/grpc/BUILD.bazel
+@@ -169,7 +169,6 @@
+         "//src/mongo:base",
+         "//src/mongo/db:service_context",
+         "//src/mongo/rpc:client_metadata",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/unittest",
+     ],
+ )
+@@ -215,9 +214,7 @@
+         "//src/mongo/transport:grpc_connection_stats",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer",
+         "//src/mongo/transport:transport_layer_common",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/transport:transport_layer_mock",
+         "//src/mongo/util:clock_source_mock",
+         "//src/mongo/util:periodic_runner_factory",
+--- a/src/mongo/transport/asio/BUILD.bazel
++++ b/src/mongo/transport/asio/BUILD.bazel
+@@ -24,6 +24,5 @@
+     deps = [
+         "//src/mongo/db:service_context_test_fixture",
+         "//src/mongo/db/shard_role:service_context_non_d",
+-        "//src/mongo/transport:transport_layer",
+     ],
+ )
+--- a/src/mongo/tools/mongosentry_tool/BUILD.bazel
++++ b/src/mongo/tools/mongosentry_tool/BUILD.bazel
+@@ -18,7 +18,6 @@
+         "//src/mongo/rpc",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:signal_handlers",
+         "//src/mongo/util/options_parser:options_parser_init",
+     ],
+--- a/src/mongo/tools/mongobridge_tool/BUILD.bazel
++++ b/src/mongo/tools/mongobridge_tool/BUILD.bazel
+@@ -39,7 +39,6 @@
+         "//src/mongo/transport:message_compressor_options_server",
+         "//src/mongo/transport:service_executor",
+         "//src/mongo/transport:session_manager",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:signal_handlers",
+         "//src/mongo/util/net:network",
+         "//src/mongo/util/options_parser:options_parser_init",
+--- a/src/mongo/db/repl/initial_sync/initial_syncer.cpp
++++ b/src/mongo/db/repl/initial_sync/initial_syncer.cpp
+@@ -220,7 +220,10 @@
+       _replicationProcess(replicationProcess),
+       _onCompletion(onCompletion),
+       _createClientFn(
+-          [] { return std::make_unique<DBClientConnection>(true /* autoReconnect */); }),
++          []() -> std::unique_ptr<DBClientConnection> {
++              // No network stack here, so there is no sync source to reach.
++              uasserted(ErrorCodes::IllegalOperation, "this build links no network stack; an embedded engine has no sockets -- see docs/native-size-reduction.md");
++          }),
+       _createOplogFetcherFn(CreateOplogFetcherFn::get()),
+       _currentPhase(Phase::kNotStarted) {
+     uassert(ErrorCodes::BadValue, "task executor cannot be null", _exec);
+--- a/src/mongo/db/repl/initial_sync/BUILD.bazel
++++ b/src/mongo/db/repl/initial_sync/BUILD.bazel
+@@ -50,7 +50,6 @@
+     deps = [
+         ":repl_sync_shared_data",
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db/repl:repl_server_parameters",
+         "//src/mongo/db/repl:replication_auth",
+         "//src/mongo/db/repl:replication_consistency_markers_impl",
+@@ -70,7 +69,6 @@
+         ":cloner_utils",
+         ":repl_sync_shared_data",
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:multitenancy",
+         "//src/mongo/db:server_feature_flags",
+         "//src/mongo/db/commands:list_collections_filter",
+@@ -100,7 +98,6 @@
+     deps = [
+         ":initial_sync_cloners",
+         ":repl_sync_shared_data",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/client:fetcher",
+         "//src/mongo/db:server_base",
+         "//src/mongo/db/commands/server_status:server_status_core",
+--- a/src/mongo/db/query/write_ops/BUILD.bazel
++++ b/src/mongo/db/query/write_ops/BUILD.bazel
+@@ -288,7 +288,6 @@
+         "write_ops_document_stream_integration_test.cpp",
+     ],
+     deps = [
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/transport:transport_layer_egress_init",
+         "//src/mongo/util:version_impl",
+     ],
+--- a/src/mongo/db/query/search/search_task_executors.cpp
++++ b/src/mongo/db/query/search/search_task_executors.cpp
+@@ -45,48 +45,11 @@
+ }
+ 
+ struct State {
+-    State() {
+-        constexpr std::string_view kMongotExecutorName = "MongotExecutor";
+-        constexpr std::string_view kSearchIndexManagementExecutorName = "SearchIndexMgmtExecutor";
+-
+-        std::unique_ptr<NetworkInterface> mongotExecutorNetworkInterface;
+-        std::unique_ptr<NetworkInterface> searchIdxNetworkInterface;
+-
+-        if (globalMongotParams.useGRPC) {
+-#ifdef MONGO_CONFIG_GRPC
+-            mongotExecutorNetworkInterface = makeNetworkInterfaceGRPC(kMongotExecutorName);
+-            searchIdxNetworkInterface =
+-                makeNetworkInterfaceGRPC(kSearchIndexManagementExecutorName);
+-#else
+-            uasserted(ErrorCodes::InvalidOptions,
+-                      "useGrpcForSearch is enabled but this build was compiled without gRPC "
+-                      "support. Rebuild with gRPC or disable useGrpcForSearch.");
+-#endif
+-        } else {
+-            mongotExecutorNetworkInterface = makeNetworkInterface(
+-                kMongotExecutorName, nullptr, nullptr, makeMongotConnPoolOptions());
+-
+-            // Make a separate search index management NetworkInterface that's independently
+-            // configurable.
+-            ConnectionPool::Options searchIndexPoolOptions;
+-            searchIndexPoolOptions.skipAuthentication =
+-                globalSearchIndexParams.skipAuthToSearchIndexServer;
+-            searchIdxNetworkInterface = makeNetworkInterface(kSearchIndexManagementExecutorName,
+-                                                             nullptr,
+-                                                             nullptr,
+-                                                             std::move(searchIndexPoolOptions));
+-        }
+-
+-        auto mongotThreadPool =
+-            std::make_unique<NetworkInterfaceThreadPool>(mongotExecutorNetworkInterface.get());
+-        mongotExecutor = ThreadPoolTaskExecutor::create(std::move(mongotThreadPool),
+-                                                        std::move(mongotExecutorNetworkInterface));
+-
+-        auto searchIndexThreadPool =
+-            std::make_unique<NetworkInterfaceThreadPool>(searchIdxNetworkInterface.get());
+-        searchIndexMgmtExecutor = ThreadPoolTaskExecutor::create(
+-            std::move(searchIndexThreadPool), std::move(searchIdxNetworkInterface));
+-    }
++    // This build links no network stack, so there is no mongot to reach and no executor to
++    // build. State is a ServiceContext decoration, constructed for every engine, so this must
++    // stay a no-op rather than throw. The executors below remain null; a $search operation
++    // fails when it tries to use one.
++    State() {}
+ 
+     synchronized_value<std::shared_ptr<TaskExecutor>> mongotExecutor;
+     synchronized_value<std::shared_ptr<TaskExecutor>> searchIndexMgmtExecutor;
+--- a/src/mongo/db/query/search/BUILD.bazel
++++ b/src/mongo/db/query/search/BUILD.bazel
+@@ -112,7 +112,6 @@
+         "//src/mongo/db/commands/server_status:server_status_core",
+         "//src/mongo/executor:connection_pool_controllers",
+         "//src/mongo/executor:connection_pool_stats",
+-        "//src/mongo/executor:network_interface_factory",
+         "//src/mongo/executor:network_interface_thread_pool",
+         "//src/mongo/executor:pinned_connection_task_executor_registry",
+         "//src/mongo/executor:task_executor_interface",
+@@ -213,7 +212,6 @@
+     deps = [
+         ":mongot_cursor",
+         "//src/mongo/executor:network_interface_mock",
+-        "//src/mongo/executor:network_interface_tl",
+         "//src/mongo/executor:thread_pool_task_executor_test_fixture",
+         "//src/mongo/transport:transport_layer_mock",
+     ],
+--- a/src/mongo/db/query/query_tester/BUILD.bazel
++++ b/src/mongo/db/query/query_tester/BUILD.bazel
+@@ -18,12 +18,10 @@
+     ],
+     deps = [
+         "//src/mongo:base",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:common",
+         "//src/mongo/db/query/util:jparse_util",
+         "//src/mongo/rpc:message",
+         "//src/mongo/shell:shell_utils",
+-        "//src/mongo/transport:transport_layer_manager",
+         "//src/mongo/util:pcre_wrapper",
+     ],
+ )
+--- a/src/mongo/db/query/query_settings/query_settings_backfill.cpp
++++ b/src/mongo/db/query/query_settings/query_settings_backfill.cpp
+@@ -473,14 +473,8 @@
+ 
+ std::unique_ptr<async_rpc::Targeter> ReplicaSetBackfillCoordinator::makeTargeter(
+     OperationContext* opCtx) {
+-    auto&& config = mongo::repl::ReplicationCoordinator::get(opCtx)->getConfig();
+-    uassert(ErrorCodes::NotYetInitialized,
+-            "Replication has not yet been configured",
+-            config.isInitialized());
+-    std::unique_ptr<RemoteCommandTargeter> uniqueRemoteCommandTargeter =
+-        RemoteCommandTargeterFactoryImpl{}.create(config.getConnectionString());
+-    return makeAsyncRpcTargeterAdaptor(
+-        std::shared_ptr<RemoteCommandTargeter>(uniqueRemoteCommandTargeter.release()));
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no network stack; an embedded engine has no sockets -- see docs/native-size-reduction.md");
+ }
+ 
+ }  // namespace mongo::query_settings
+--- a/src/mongo/db/query/query_settings/BUILD.bazel
++++ b/src/mongo/db/query/query_settings/BUILD.bazel
+@@ -98,7 +98,6 @@
+     ],
+     deps = [
+         ":query_settings",
+-        "//src/mongo/client:remote_command_targeter",
+         "//src/mongo/crypto:fle_fields",
+         "//src/mongo/crypto:sha256_block",
+         "//src/mongo/db:commands",
+--- a/src/mongo/scripting/mozjs/shell/BUILD.bazel
++++ b/src/mongo/scripting/mozjs/shell/BUILD.bazel
+@@ -76,7 +76,6 @@
+     }),
+     deps = [
+         ":internal_module_registry",
+-        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:service_context",
+         "//src/mongo/db/auth:security_token_auth",
+         "//src/mongo/scripting:scripting_common",

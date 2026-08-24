@@ -1,0 +1,88 @@
+--- a/src/mongo/util/generate_icu_init_cpp.py
++++ b/src/mongo/util/generate_icu_init_cpp.py
+@@ -3,8 +3,75 @@
+ # SPDX-License-Identifier: SSPL-1.0
+ 
+ import optparse
++import struct
+ import sys
+ 
++# Only these locales keep their collation tables in the embedded data file. The full ICU 57
++# package carries 110 of them and is compiled into the shared library as a byte array, where
++# it costs 3.2 MB; the tables below cost 0.8 MB. A locale that is not kept is reported as
++# "Field 'locale' is invalid", the same error ICU-unknown locales already produce.
++KEEP_LOCALES = ("root",)
++
++# Locale entries this small are aliases onto another locale's tables rather than tables of
++# their own, so keeping all of them costs about 25 KB and preserves every locale that
++# collates identically to one that is kept.
++ALIAS_MAX_BYTES = 4096
++
++
++def parse_common_data(data):
++    """Split an ICU .dat package into its header and its (name, bytes) items."""
++    header_size = struct.unpack_from("<H", data, 0)[0]
++    if data[2] != 0xDA or data[3] != 0x27 or data[12:16] != b"CmnD":
++        raise ValueError("not an ICU common data package")
++    count = struct.unpack_from("<I", data, header_size)[0]
++    toc = [struct.unpack_from("<II", data, header_size + 4 + 8 * i) for i in range(count)]
++    entries = []
++    for i, (name_offset, data_offset) in enumerate(toc):
++        name_start = header_size + name_offset
++        name = data[name_start : data.index(b"\0", name_start)].decode()
++        end = toc[i + 1][1] if i + 1 < count else len(data) - header_size
++        entries.append((name, data[header_size + data_offset : header_size + end]))
++    return data[:header_size], entries
++
++
++def build_common_data(header, entries):
++    """Inverse of parse_common_data. Item data stays 16-aligned, as ICU requires."""
++    toc_size = 4 + 8 * len(entries)
++    names = b"".join(name.encode() + b"\0" for name, _ in entries)
++    data_start = (toc_size + len(names) + 15) & ~15
++    toc = b""
++    name_offset, data_offset = toc_size, data_start
++    for name, item in entries:
++        toc += struct.pack("<II", name_offset, data_offset)
++        name_offset += len(name) + 1
++        data_offset += len(item)
++    return b"".join(
++        [
++            header,
++            struct.pack("<I", len(entries)),
++            toc,
++            names,
++            b"\xaa" * (data_start - toc_size - len(names)),
++            b"".join(item for _, item in entries),
++        ]
++    )
++
++
++def trim_collation_locales(data):
++    """Drop the collation tables for locales outside KEEP_LOCALES."""
++    header, entries = parse_common_data(data)
++    return build_common_data(
++        header,
++        [
++            (name, item)
++            for name, item in entries
++            if "/coll/" not in name
++            or not name.endswith(".res")
++            or name.rsplit("/", 1)[1].removesuffix(".res") in KEEP_LOCALES
++            or len(item) <= ALIAS_MAX_BYTES
++        ],
++    )
++
+ 
+ def main(argv):
+     parser = optparse.OptionParser()
+@@ -67,7 +134,8 @@
+ """
+     decimal_encoded_data = ""
+     with open(data_file_path, "rb") as data_file:
+-        decimal_encoded_data = ",".join([str(byte) for byte in data_file.read()])
++        data = trim_collation_locales(data_file.read())
++    decimal_encoded_data = ",".join([str(byte) for byte in data])
+     with open(cpp_file_path, "w") as cpp_file:
+         cpp_file.write(source_template % dict(decimal_encoded_data=decimal_encoded_data))
+ 

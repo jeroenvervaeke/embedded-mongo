@@ -164,6 +164,27 @@ fn features_work_end_to_end() {
     assert_eq!(sales_report.len(), 2);
     assert_eq!(sales_report[0].get_str("product").unwrap(), "Keyboard");
 
+    // "en" collates through ICU's root tables, which the embedded data file keeps even after
+    // patches/0001 drops the large per-language ones.
+    let collated = client.database("collation");
+    collated
+        .run_command(&doc! {
+            "create": "words",
+            "collation": { "locale": "en", "strength": 2 },
+        })
+        .unwrap();
+    let words = collated.collection::<Item>("words");
+    words
+        .insert_one(Item {
+            id: None,
+            name: "Ada".to_owned(),
+        })
+        .unwrap();
+    assert!(
+        words.find_one(doc! { "name": "ada" }).unwrap().is_some(),
+        "collation at strength 2 should match case-insensitively"
+    );
+
     thread::scope(|scope| {
         for index in 0..4 {
             let client = &client;

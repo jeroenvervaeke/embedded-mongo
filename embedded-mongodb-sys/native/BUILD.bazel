@@ -5,6 +5,10 @@ cc_binary(
     srcs = [
         "embedded_mongodb_native.cpp",
         "embedded_mongodb_native.h",
+        # Built with ssl=False, which drops the TLS stack this library has no use for.
+        # MongoDB still references SSLPeerInfo::forSession from client.h and the
+        # authentication commands, so its definition has to come along.
+        "@//src/mongo/util/net:ssl_peer_info.cpp",
         # Mongo's auto-header scanner cannot see injected-repository sources.
         "@//src/mongo/base/.auto_header:initializer_h",
         "@//src/mongo/bson/.auto_header:bson_validate_h",
@@ -28,11 +32,11 @@ cc_binary(
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:collection_catalog_helper_h",
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:collection_h",
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:collection_impl_h",
-        "@//src/mongo/db/shard_role/shard_catalog/.auto_header:collection_sharding_state_factory_shard_h",
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:collection_sharding_state_h",
+        "@//src/mongo/db/shard_role/shard_catalog/.auto_header:database_sharding_state_h",
+        "@//src/mongo/db/shard_role/shard_catalog/.auto_header:scoped_collection_metadata_h",
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:database_holder_h",
         "@//src/mongo/db/shard_role/shard_catalog/.auto_header:database_holder_impl_h",
-        "@//src/mongo/db/shard_role/shard_catalog/.auto_header:database_sharding_state_factory_shard_h",
         "@//src/mongo/db/storage/.auto_header:storage_engine_h",
         "@//src/mongo/db/storage/.auto_header:storage_engine_lock_file_h",
         "@//src/mongo/db/storage/.auto_header:storage_options_h",
@@ -57,6 +61,18 @@ cc_binary(
         "-I$(GENDIR)/src",
         "-Isrc",
     ],
+    additional_linker_inputs = select({
+        "@platforms//os:linux": ["export.map"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        # The engine is reached through the five extern "C" entry points in
+        # embedded_mongodb_native.h. Every other exported symbol is a --gc-sections root, and
+        # the third-party libraries mark their API visibility("default") in their own headers,
+        # so -fvisibility=hidden still left 5915 of them exported. Hiding them is worth 1.7 MB.
+        "@platforms//os:linux": ["-Wl,--version-script=$(location export.map)"],
+        "//conditions:default": [],
+    }),
     linkshared = True,
     deps = [
         "@//src/mongo/bson:bson_validate",
@@ -73,7 +89,6 @@ cc_binary(
         "@//src/mongo/db/repl:replmocks",
         "@//src/mongo/db/rss:persistence_provider_impl",
         "@//src/mongo/db/rss:service_lifecycle_impl",
-        "@//src/mongo/db/s:sharding_runtime_d",
         "@//src/mongo/db/shard_role/shard_catalog:catalog_impl",
         "@//src/mongo/db/shard_role/shard_catalog:database_holder",
         "@//src/mongo/db/stats:top",
@@ -81,9 +96,12 @@ cc_binary(
         "@//src/mongo/db/storage:storage_engine_lock_file",
         "@//src/mongo/db/storage:storage_options",
         "@//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
-        "@//src/mongo/dbtests:mocklib",
         "@//src/mongo/rpc",
-        "@//src/mongo/s:startup_initialization",
         "@//src/mongo/util:periodic_runner_factory",
+        # Registers the build's version information. Without it any command that
+        # reports serverInfo -- explain, among others -- fasserts with "Terminating
+        # because valid version info has not been configured" and aborts the host
+        # process rather than returning an error.
+        "@//src/mongo/util:version_impl",
     ],
 )

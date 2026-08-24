@@ -1,0 +1,565 @@
+diff --git a/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp b/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
+index 8ecc622a..eac70885 100644
+--- a/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
++++ b/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
+@@ -268,7 +268,8 @@ private:
+      * Return the shard id of the config server.
+      */
+     ShardId getConfigShardId(OperationContext* opCtx) const {
+-        return Grid::get(opCtx)->shardRegistry()->getConfigShard()->getId();
++        uasserted(ErrorCodes::IllegalOperation,
++                 "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+     }
+ 
+     /**
+@@ -276,14 +277,7 @@ private:
+      */
+     void reloadShardRegistryIfNotAllShardsArePresent(OperationContext* opCtx,
+                                                      const stdx::unordered_set<ShardId>& shardIds) {
+-        bool allRequestedShardsArePresent = [&]() {
+-            auto allAvailableShardIds = Grid::get(opCtx)->shardRegistry()->getAllShardIds(opCtx);
+-            std::sort(allAvailableShardIds.begin(), allAvailableShardIds.end());
+-            return std::all_of(shardIds.begin(), shardIds.end(), [&](const auto& shardId) {
+-                return std::binary_search(
+-                    allAvailableShardIds.begin(), allAvailableShardIds.end(), shardId);
+-            });
+-        }();
++        bool allRequestedShardsArePresent = true;
+ 
+         if (!allRequestedShardsArePresent) {
+             // In case one of the target shards is not known by the shard registry, reload the shard
+@@ -302,7 +296,8 @@ private:
+             "shardIds"_attr = shardIds,
+             "changeStream"_attr = _changeStream);
+ 
+-        Grid::get(opCtx)->shardRegistry()->reload(opCtx);
++        uasserted(ErrorCodes::IllegalOperation,
++                 "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+     }
+ 
+     /**
+@@ -356,22 +351,7 @@ private:
+             // in a special way by the callers inside this stage, i.e. they get converted into fatal
+             // 'ShardRemovedError's in strict more, and retryable 'RetryChangeStream' errors in
+             // ignore-removed-shards mode.
+-            for (const ShardId& shardId : shardIds) {
+-                if (auto swRes = Grid::get(opCtx)->shardRegistry()->getShard(opCtx, shardId);
+-                    swRes.getStatus().code() == ErrorCodes::ShardNotFound) {
+-                    // If any shard id is indeed not found, we will get a 'ShardNotFound' error from
+-                    // the shard registry. In this case throw this error to the caller.
+-                    LOGV2_DEBUG(10657553,
+-                                3,
+-                                STAGE_LOG_PREFIX "Could not find shard in shard registry",
+-                                "shardId"_attr = shardId,
+-                                "error"_attr = redact(ex.toStatus()),
+-                                "shardStatus"_attr = redact(swRes.getStatus()),
+-                                "changeStream"_attr = _changeStream);
+-
+-                    error_details::throwExceptionForStatus(swRes.getStatus());
+-                }
+-            }
++            // Without a shard registry there is nothing to re-check; rethrow below.
+ 
+             // In case all shard ids are present in the updated shard registry, rethrow the original
+             // exception. This can be a 'ShardNotFound' exception or any other type of exception.
+diff --git a/src/mongo/db/exec/classic/timeseries_modify.cpp b/src/mongo/db/exec/classic/timeseries_modify.cpp
+index 829a7507..af523681 100644
+--- a/src/mongo/db/exec/classic/timeseries_modify.cpp
++++ b/src/mongo/db/exec/classic/timeseries_modify.cpp
+@@ -295,47 +295,8 @@ void TimeseriesModifyStage::_checkUpdateChangesExistingShardKey(const BSONObj& n
+                                                                 const BSONObj& oldBucket,
+                                                                 const BSONObj& newMeasurement,
+                                                                 const BSONObj& oldMeasurement) {
+-    const auto& collDesc = collectionAcquisition().getShardingDescription();
+-    const auto& shardKeyPattern = collDesc.getShardKeyPattern();
+-
+-    auto oldShardKey = shardKeyPattern.extractShardKeyFromDoc(oldBucket);
+-    auto newShardKey = shardKeyPattern.extractShardKeyFromDoc(newBucket);
+-
+-    // If the shard key fields remain unchanged by this update we can skip the rest of the checks.
+-    // Using BSONObj::binaryEqual() still allows a missing shard key field to be filled in with an
+-    // explicit null value.
+-    if (newShardKey.binaryEqual(oldShardKey)) {
+-        return;
+-    }
+-
+-    FieldRefSet shardKeyPaths(collDesc.getKeyPatternFields());
+-
+-    // Assert that the updated doc has no arrays or array descendants for the shard key fields.
+-    update::assertPathsNotArray(mutablebson::Document{oldBucket}, shardKeyPaths);
+-
+-    _checkRestrictionsOnUpdatingShardKeyAreNotViolated(collDesc, shardKeyPaths);
+-
+-    // At this point we already asserted that the complete shardKey have been specified in the
+-    // query, this implies that mongos is not doing a broadcast update and that it attached a
+-    // shardVersion to the command. Thus it is safe to call getOwnershipFilter
+-    const auto& collFilter = collectionAcquisition().getShardingFilter();
+-    invariant(collFilter);
+-
+-    // If the shard key of an orphan document is allowed to change, and the document is allowed to
+-    // become owned by the shard, the global uniqueness assumption for _id values would be violated.
+-    invariant(collFilter->keyBelongsToMe(oldShardKey));
+-
+-    if (!collFilter->keyBelongsToMe(newShardKey)) {
+-        // We send the 'oldMeasurement' instead of the old bucket document to leverage timeseries
+-        // deleteOne because the delete can run inside an internal transaction.
+-        uasserted(WouldChangeOwningShardInfo(oldMeasurement,
+-                                             newBucket,
+-                                             false,
+-                                             collectionPtr()->ns(),
+-                                             collectionPtr()->uuid(),
+-                                             newMeasurement),
+-                  "This update would cause the doc to change owning shards");
+-    }
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+ }
+ 
+ void TimeseriesModifyStage::_checkUpdateChangesReshardingKey(const BSONObj& newBucket,
+diff --git a/src/mongo/db/exec/classic/timeseries_upsert.cpp b/src/mongo/db/exec/classic/timeseries_upsert.cpp
+index 0aca43b6..c57dcc3e 100644
+--- a/src/mongo/db/exec/classic/timeseries_upsert.cpp
++++ b/src/mongo/db/exec/classic/timeseries_upsert.cpp
+@@ -112,47 +112,9 @@ PlanStage::StageState TimeseriesUpsertStage::doWork(WorkingSetID* out) {
+ void TimeseriesUpsertStage::_performInsert(BSONObj newMeasurement) {
+     if (_isUserInitiatedUpdate) {
+         const auto& acq = collectionAcquisition();
+-        if (const auto& collDesc = acq.getShardingDescription(); collDesc.isSharded()) {
+-            auto newBucket =
+-                timeseries::write_ops::makeBucketDocument({newMeasurement},
+-                                                          acq.nss(),
+-                                                          collectionPtr()->uuid(),
+-                                                          *collectionPtr()->getTimeseriesOptions(),
+-                                                          collectionPtr()->getDefaultCollator());
+-
+-            //  The shard key fields may not have arrays at any point along their paths.
+-            update::assertPathsNotArray(mutablebson::Document{newBucket},
+-                                        collDesc.getKeyPatternFields());
+-
+-            const auto& collFilter = acq.getShardingFilter();
+-            invariant(collFilter);
+-
+-            auto newShardKey = collDesc.getShardKeyPattern().extractShardKeyFromDoc(newBucket);
+-            if (!collFilter->keyBelongsToMe(newShardKey)) {
+-                // An attempt to upsert a document with a shard key value that belongs on
+-                // another shard must either be a retryable write or inside a transaction. An
+-                // upsert without a transaction number is legal if
+-                // gFeatureFlagUpdateDocumentShardKeyUsingTransactionApi is enabled because
+-                // mongos will be able to start an internal transaction to handle the
+-                // wouldChangeOwningShard error thrown below.
+-                if (!feature_flags::gFeatureFlagUpdateDocumentShardKeyUsingTransactionApi.isEnabled(
+-                        VersionContext::getDecoration(opCtx()),
+-                        serverGlobalParams.featureCompatibility.acquireFCVSnapshot())) {
+-                    uassert(ErrorCodes::IllegalOperation,
+-                            "The upsert document could not be inserted onto the shard targeted "
+-                            "by the query, since its shard key belongs on a different shard. "
+-                            "Cross-shard upserts are only allowed when running in a "
+-                            "transaction or with retryWrites: true.",
+-                            opCtx()->getTxnNumber());
+-                }
+-                uasserted(WouldChangeOwningShardInfo(_originalPredicate->serialize(),
+-                                                     newBucket,
+-                                                     true,  // upsert
+-                                                     acq.nss(),
+-                                                     acq.uuid(),
+-                                                     newMeasurement),
+-                          "The document we are inserting belongs on a different shard");
+-            }
++        if (acq.getShardingDescription().isSharded()) {
++            uasserted(ErrorCodes::IllegalOperation,
++                     "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+         }
+     }
+     writeConflictRetry(opCtx(), "TimeseriesUpsert", collectionPtr()->ns(), [&] {
+diff --git a/src/mongo/db/op_observer/BUILD.bazel b/src/mongo/db/op_observer/BUILD.bazel
+index 9853f4bd..5f6fa78a 100644
+--- a/src/mongo/db/op_observer/BUILD.bazel
++++ b/src/mongo/db/op_observer/BUILD.bazel
+@@ -197,7 +197,6 @@ mongo_cc_library(
+         "//src/mongo:base",
+         "//src/mongo/db/commands:mongod_fcv",
+         "//src/mongo/db/pipeline:change_stream_expired_pre_image_remover",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:kill_sessions_local",
+         "//src/mongo/executor:egress_connection_closer_manager",
+     ],
+@@ -314,7 +313,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/auth:authserver",
+         "//src/mongo/db/repl:primary_only_service",
+         "//src/mongo/db/repl:replmocks",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:collection_mock",
+         "//src/mongo/db/timeseries:timeseries_op_observer",
+         "//src/mongo/db/topology/cluster_parameters:cluster_server_parameter_op_observer",
+diff --git a/src/mongo/db/pipeline/process_interface/common_process_interface.cpp b/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
+index 5a1a955b..5f9cf5b6 100644
+--- a/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
++++ b/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
+@@ -221,10 +221,8 @@ bool isIdIndexFullyUnique(const ShardKeyPattern* shardKeyPattern, const BSONObj&
+     // We can't use ShardKeyPattern::isIndexUniquenessAndCollationCompatible because it has a
+     // hard-coded exception for _id index that we want to bypass. _id is guaranteed to be unique
+     // across all shards only if the shard key is _id.
+-    return shardKeyPattern == nullptr ||
+-        (shardKeyPattern->getKeyPatternFields().size() == 1 &&
+-         shardKeyPattern->getKeyPatternFields()[0]->equalsDottedField(
+-             indexKeyPattern.firstElementFieldNameStringData()));
++    // No sharding runtime here, so there is never a shard key and _id is always fully unique.
++    return true;
+ }
+ 
+ }  // namespace
+@@ -287,19 +285,8 @@ boost::optional<ShardId> CommonProcessInterface::findOwningShard(OperationContex
+ boost::optional<ShardId> CommonProcessInterface::findOwningShard(OperationContext* opCtx,
+                                                                  RoutingContext& routingCtx,
+                                                                  const NamespaceString& nss) {
+-    const auto& cri = routingCtx.getCollectionRoutingInfo(nss);
+-
+-    if (cri.hasRoutingTable()) {
+-        const auto& cm = cri.getChunkManager();
+-        if (cm.isUnsplittable()) {
+-            return cm.getMinKeyShardIdWithSimpleCollation();
+-        } else {
+-            return boost::none;
+-        }
+-    } else {
+-        return cri.getDbPrimaryShardId();
+-    }
+-    return boost::none;
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+ }
+ 
+ std::string CommonProcessInterface::getHostAndPort(OperationContext* opCtx) const {
+@@ -308,120 +295,16 @@ std::string CommonProcessInterface::getHostAndPort(OperationContext* opCtx) cons
+ 
+ std::vector<DatabaseName> CommonProcessInterface::_getAllDatabasesOnAShardedCluster(
+     OperationContext* opCtx, boost::optional<TenantId> tenantId) {
+-    tassert(9525808, "This method can only run on a sharded cluster", Grid::get(opCtx));
+-
+-    const std::vector<DatabaseType> databaseTypes =
+-        Grid::get(opCtx)->catalogClient()->getAllDBs(opCtx, repl::ReadConcernArgs::kSnapshot);
+-
+-    std::vector<DatabaseName> databases;
+-    databases.reserve(databaseTypes.size());
+-
+-    std::transform(databaseTypes.begin(),
+-                   databaseTypes.end(),
+-                   std::back_inserter(databases),
+-                   [](const DatabaseType& dbType) -> DatabaseName { return dbType.getDbName(); });
+-
+-    // Add internal databases.
+-    databases.push_back(DatabaseName::kAdmin);
+-    databases.push_back(DatabaseName::kConfig);
+-
+-    return databases;
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+ }
+ 
+ std::vector<BSONObj> CommonProcessInterface::_runListCollectionsCommandOnAShardedCluster(
+     OperationContext* opCtx,
+     const NamespaceString& nss,
+     const RunListCollectionsCommandOptions& opts) {
+-
+-    tassert(9525809, "This method can only run on a sharded cluster", Grid::get(opCtx));
+-
+-    const bool isCollectionless = nss.coll().empty();
+-    tassert(12322133,
+-            "Received collection name both in namespace and listCollection filter parameter",
+-            isCollectionless || !opts.filter.hasField("name"));
+-
+-    const auto appendPrimaryShardIfRequested = [&opts](const std::vector<BSONObj>& collections,
+-                                                       const ShardId& primary) {
+-        if (!opts.addPrimaryShard) {
+-            return collections;
+-        }
+-
+-        std::vector<BSONObj> collectionsWithPrimaryShard;
+-        collectionsWithPrimaryShard.reserve(collections.size());
+-        for (const BSONObj& bsonObj : collections) {
+-            BSONObjBuilder bob(bsonObj.getOwned());
+-            bob.append("primary", primary);
+-            collectionsWithPrimaryShard.emplace_back(bob.obj());
+-        }
+-        return collectionsWithPrimaryShard;
+-    };
+-
+-    const auto runListCollectionsFunc = [&](OperationContext* opCtx,
+-                                            const CachedDatabaseInfo& cdb) {
+-        ListCollections listCollectionsCmd;
+-        listCollectionsCmd.setDbName(nss.dbName());
+-        if (opts.rawData) {
+-            listCollectionsCmd.setRawData(true);
+-        }
+-        if (!isCollectionless || !opts.filter.isEmpty()) {
+-            BSONObjBuilder filterBuilder;
+-            if (!isCollectionless) {
+-                filterBuilder.append("name", nss.coll());
+-            }
+-            filterBuilder.appendElements(opts.filter);
+-            listCollectionsCmd.setFilter(filterBuilder.obj());
+-        }
+-
+-        listCollectionsCmd.setReadConcern(std::invoke([opCtx] {
+-            const auto& readConcern = repl::ReadConcernArgs::get(opCtx);
+-            tassert(9746001,
+-                    str::stream() << "listCollections only allows 'local' read concern. Trying "
+-                                     "to call it with '"
+-                                  << repl::readConcernLevels::toString(readConcern.getLevel())
+-                                  << "' read concern level.",
+-                    readConcern.getLevel() == repl::ReadConcernLevel::kLocalReadConcern);
+-            return readConcern;
+-        }));
+-
+-        generic_argument_util::setDbVersionIfPresent(listCollectionsCmd, cdb->getVersion());
+-
+-        const auto shard =
+-            uassertStatusOK(Grid::get(opCtx)->shardRegistry()->getShard(opCtx, cdb->getPrimary()));
+-        Shard::QueryResponse resultCollections;
+-
+-        // Some collections (for example temp collections) only exist on the replica set primary so
+-        // we may need to change the read preference to locate these.
+-        const ReadPreferenceSetting readPreference = opts.runOnPrimary
+-            ? ReadPreferenceSetting(ReadPreference::PrimaryOnly)
+-            : ReadPreferenceSetting::get(opCtx);
+-
+-        resultCollections = uassertStatusOK(shard->runExhaustiveCursorCommand(
+-            opCtx,
+-            readPreference,
+-            nss.dbName(),
+-            listCollectionsCmd.toBSON(),
+-            opCtx->hasDeadline() ? opCtx->getRemainingMaxTimeMillis() : Milliseconds(-1)));
+-
+-        tassert(10898400,
+-                str::stream() << "Expected at most one collection with the name "
+-                              << nss.toStringForErrorMsg() << ": " << resultCollections.docs.size(),
+-                isCollectionless || resultCollections.docs.size() <= 1);
+-
+-        return appendPrimaryShardIfRequested(resultCollections.docs, cdb->getPrimary());
+-    };
+-
+-    sharding::router::DBPrimaryRouter router(opCtx, nss.dbName());
+-    try {
+-        return router.route(
+-            "CommonMongodProcessInterface::_runListCollectionsCommandOnAShardedCluster",
+-            runListCollectionsFunc);
+-    } catch (ExceptionFor<ErrorCodes::NamespaceNotFound>&) {
+-        // The listCollections command returns a success status with an empty list when the given
+-        // database doesn't exist. Therefore, we must replicate the same behavior here by ignoring
+-        // the NamespaceNotFound error that may be thrown during the DBPrimaryRouter::route()
+-        // initialization.
+-        return std::vector<BSONObj>();
+-    }
++    uasserted(ErrorCodes::IllegalOperation,
++             "this build links no sharding runtime; every collection is unsharded -- see docs/native-size-reduction.md");
+ }
+ 
+ }  // namespace mongo
+diff --git a/src/mongo/db/repl/BUILD.bazel b/src/mongo/db/repl/BUILD.bazel
+index de5a24d8..f85ee99b 100644
+--- a/src/mongo/db/repl/BUILD.bazel
++++ b/src/mongo/db/repl/BUILD.bazel
+@@ -1305,7 +1305,6 @@ mongo_cc_library(
+         "//src/mongo/db:service_context",
+         "//src/mongo/db/index_builds:index_builds_coordinator",
+         "//src/mongo/db/query/write_ops",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:kill_sessions_local",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/shard_role/lock_manager",
+@@ -1962,7 +1961,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db/pipeline:change_stream_expired_pre_image_remover",
+         "//src/mongo/db/query:command_request_response",
+         "//src/mongo/db/repl/dbcheck:health_log",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:logical_session_id_helpers",
+         "//src/mongo/db/shard_role",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
+@@ -2194,7 +2192,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db:service_context_d_test_fixture",
+         "//src/mongo/db/collection_crud",
+         "//src/mongo/db/op_observer",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/transaction",
+         "//src/mongo/executor:thread_pool_task_executor_test_fixture",
+@@ -2334,7 +2331,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/op_observer:operation_logger_impl",
+         "//src/mongo/db/query/client_cursor",
+         "//src/mongo/db/rss:persistence_provider_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+@@ -2391,7 +2387,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/op_observer:operation_logger_transaction_proxy",
+         "//src/mongo/db/op_observer:replica_set_write_block_op_observer",
+         "//src/mongo/db/op_observer:user_write_block_mode_op_observer",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/storage:storage_options",
+         "//src/mongo/db/timeseries:timeseries_op_observer",
+         "//src/mongo/db/topology/cluster_parameters:cluster_server_parameter_op_observer",
+@@ -2422,7 +2417,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/op_observer:operation_logger_impl",
+         "//src/mongo/db/query/client_cursor",
+         "//src/mongo/db/rss:persistence_provider_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+diff --git a/src/mongo/db/s/resharding/BUILD.bazel b/src/mongo/db/s/resharding/BUILD.bazel
+index ec07bb54..ed7bbe7c 100644
+--- a/src/mongo/db/s/resharding/BUILD.bazel
++++ b/src/mongo/db/s/resharding/BUILD.bazel
+@@ -306,7 +306,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/auth:authmocks",
+         "//src/mongo/db/auth:authorization_manager_global",
+         "//src/mongo/db/global_catalog:sharding_catalog_client_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/sharding_environment:sharding_test_fixture_common",
+     ],
+ )
+@@ -323,7 +322,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db/auth:authmocks",
+         "//src/mongo/db/auth:authorization_manager_global",
+         "//src/mongo/db/global_catalog:sharding_catalog_client_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/sharding_environment:sharding_test_fixture_common",
+     ],
+ )
+diff --git a/src/mongo/db/service_entry_point_shard_role.cpp b/src/mongo/db/service_entry_point_shard_role.cpp
+index e296246b..b077ff4d 100644
+--- a/src/mongo/db/service_entry_point_shard_role.cpp
++++ b/src/mongo/db/service_entry_point_shard_role.cpp
+@@ -2087,11 +2087,8 @@ bool ExecCommandDatabase::_awaitShardingInitializedIfNeeded(const Status& status
+         return false;
+     }
+ 
+-    if (status == ErrorCodes::ShardingStateNotInitialized && !_awaitedShardingInitialization) {
+-        sharding::awaitShardRoleReady(opCtx);
+-        _awaitedShardingInitialization = true;
+-        return true;
+-    }
++    // This build links no sharding runtime, so sharding state is never uninitialized and there
++    // is nothing to wait for.
+     return false;
+ }
+ 
+diff --git a/src/mongo/db/shard_role/BUILD.bazel b/src/mongo/db/shard_role/BUILD.bazel
+index d966f4e4..15efdcc6 100644
+--- a/src/mongo/db/shard_role/BUILD.bazel
++++ b/src/mongo/db/shard_role/BUILD.bazel
+@@ -104,7 +104,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db/admission/ticketing:ticketholder",
+         "//src/mongo/db/collection_crud",
+         "//src/mongo/db/query/client_cursor",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/lock_manager:exception_util",
+         "//src/mongo/db/shard_role/shard_catalog:allow_read_from_latest_on_secondary",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_control",
+@@ -155,7 +154,6 @@ mongo_cc_fuzztest(
+     deps = [
+         ":shard_role_api_stor_ex",
+         "//src/mongo/db/s:db_s_shard_server_test_deps",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/sharding_environment:shard_server_test_fixture",
+     ],
+ )
+diff --git a/src/mongo/db/sharding_environment/BUILD.bazel b/src/mongo/db/sharding_environment/BUILD.bazel
+index 10bae2de..a09d7863 100644
+--- a/src/mongo/db/sharding_environment/BUILD.bazel
++++ b/src/mongo/db/sharding_environment/BUILD.bazel
+@@ -243,7 +243,6 @@ mongo_cc_library(
+         "//src/mongo/db/op_observer:operation_logger_impl",
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/repl:storage_interface_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+     ],
+ )
+diff --git a/src/mongo/db/topology/cluster_parameters/BUILD.bazel b/src/mongo/db/topology/cluster_parameters/BUILD.bazel
+index 494c2068..696f5521 100644
+--- a/src/mongo/db/topology/cluster_parameters/BUILD.bazel
++++ b/src/mongo/db/topology/cluster_parameters/BUILD.bazel
+@@ -207,7 +207,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db/repl:oplog_interface_local",
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/repl:storage_interface_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
+         "//src/mongo/db/sharding_environment:sharding_mongos_test_fixture",
+         "//src/mongo/util:signal_handlers",
+diff --git a/src/mongo/db/ttl/BUILD.bazel b/src/mongo/db/ttl/BUILD.bazel
+index 2a2005e8..3ade7248 100644
+--- a/src/mongo/db/ttl/BUILD.bazel
++++ b/src/mongo/db/ttl/BUILD.bazel
+@@ -43,7 +43,6 @@ mongo_cc_library(
+         "//src/mongo/db/commands/server_status:server_status_core",
+         "//src/mongo/db/query/write_ops",
+         "//src/mongo/db/repl:replica_set_aware_service",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role",
+         "//src/mongo/db/shard_role/ddl:coll_mod_command_idl",
+         "//src/mongo/db/shard_role/ddl:index_commands_idl",
+diff --git a/src/mongo/dbtests/BUILD.bazel b/src/mongo/dbtests/BUILD.bazel
+index 58d2be19..bc8328d6 100644
+--- a/src/mongo/dbtests/BUILD.bazel
++++ b/src/mongo/dbtests/BUILD.bazel
+@@ -23,7 +23,6 @@ mongo_cc_library(
+         "//src/mongo/db/index_builds:index_builds_coordinator_mongod",
+         "//src/mongo/db/op_observer",
+         "//src/mongo/db/rss/attached_storage:attached_persistence_provider",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/storage:storage_control",
+         "//src/mongo/db/storage:storage_options",
+--- a/src/mongo/db/BUILD.bazel
++++ b/src/mongo/db/BUILD.bazel
+@@ -642,7 +642,6 @@
+         "//src/mongo/db/admission/ticketing:ticketholder",
+         "//src/mongo/db/collection_crud",
+         "//src/mongo/db/query/client_cursor",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role",
+         "//src/mongo/db/shard_role/lock_manager:exception_util",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_control",
+@@ -2492,7 +2491,6 @@
+         "//src/mongo/db/repl:repl_server_parameters",
+         "//src/mongo/db/repl:replica_set_messages",
+         "//src/mongo/db/rss:disable_snapshotting_fail_point",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/shard_role/lock_manager",
+         "//src/mongo/db/stats:api_version_metrics",
+@@ -3043,7 +3041,6 @@
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/storage:storage_control",
+         "//src/mongo/db/storage:storage_options",
+@@ -3487,7 +3484,6 @@
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/shard_role/shard_catalog:database_holder",
+         "//src/mongo/db/stats:top",
+@@ -3649,7 +3645,6 @@
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/repl:storage_interface_impl",
+         "//src/mongo/db/rss/attached_storage:attached_persistence_provider",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/storage:storage_control",
+         "//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
+@@ -3681,7 +3676,6 @@
+         "//src/mongo/db/repl:storage_interface_impl",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/shard_role/shard_catalog:database_holder",
+         "//src/mongo/db/storage:storage_control",

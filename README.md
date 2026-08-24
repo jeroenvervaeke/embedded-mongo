@@ -192,8 +192,20 @@ limited to eight parallel jobs by default; override it with `EMBEDDED_MONGODB_BA
 Cargo-run tests and examples find it through the sys crate's build output; standalone binaries
 still need the shared library in the platform loader path.
 
-- **Release:** about 141 MB and optimized.
+- **Release:** about 45 MB, or 33 MB with the patches in `patches/` applied.
 - **Debug:** about 1.4 GB.
+
+The release build is size-optimized rather than speed-optimized: `-Os`, link-time optimization,
+per-function and per-data sections with `--gc-sections`, packed relative relocations, only the
+five `extern "C"` entry points exported, and no TLS, gRPC, OpenTelemetry or enterprise modules.
+Run `./scripts/apply-mongo-patches` before building. It trims the embedded ICU collation tables
+(2.6 MB), removes the slot-based execution engine so queries run on the classic one (4.7 MB), the
+replication implementation the embedded server never uses (1.1 MB), the sharding runtime (2.5 MB)
+and the network stack (0.9 MB), and fixes an assertion that aborted the host process on the first
+`hello` a driver sends. See
+[`docs/native-size-reduction.md`](docs/native-size-reduction.md) for the measurements and what
+further reduction would cost. Packed relative relocations require glibc 2.36 or newer.
+LTO is linked with `ld.bfd`, which must be on `PATH`; lld cannot read GCC's IR.
 
 ## Hard constraints
 

@@ -1,0 +1,30 @@
+#!/bin/sh
+# Applies the patches in patches/ to the MongoDB submodule. They shrink the native library
+# beyond what build flags can reach; see docs/native-size-reduction.md. Safe to re-run.
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+submodule="$repo_root/mongo"
+
+if [ ! -f "$submodule/.bazelversion" ]; then
+    echo "MongoDB submodule is missing; run 'git submodule update --init --depth 1'" >&2
+    exit 1
+fi
+
+applied=0
+for patch in "$repo_root"/patches/*.patch; do
+    name=$(basename "$patch")
+    if git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "already applied: $name"
+    else
+        git -C "$submodule" apply "$patch"
+        echo "applied: $name"
+        applied=1
+    fi
+done
+
+# Cargo watches this crate's own sources, not the submodule's, so a library built before the
+# patches went on stays cached until the sys crate is invalidated.
+if [ "$applied" -eq 1 ]; then
+    echo "run 'cargo clean -p embedded-mongodb-sys' before rebuilding an existing checkout"
+fi
