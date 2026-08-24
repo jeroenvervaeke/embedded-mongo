@@ -326,9 +326,9 @@ sharding state that wraps it.
 `patches/0006-drop-the-network-stack.patch`, worth **859,520 bytes**.
 
 An in-process engine has no sockets. Commands arrive through `DBDirectClient` and are dispatched
-over OpMsg in memory, so `clientdriver_network`, `network_interface_tl`, `network_interface_factory`,
-the transport layer and the connection pools are all dead weight — but they were reachable, so
-LTO kept them.
+over OpMsg in memory, so `clientdriver_network`, `network_interface_tl`,
+`network_interface_factory`, the transport layer and the connection pools are all dead weight —
+but they were reachable, so LTO kept them.
 
 Stripping those deps took nine iterations, and every surviving reference turned out to belong to
 something already cut: the remote oplog interface used by replication's `bgsync`, primary-only
