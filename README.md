@@ -112,7 +112,8 @@ maturin build --release
 python -m pip install target/wheels/pymongo_embedded-*.whl
 ```
 
-The first build compiles the pinned MongoDB submodule.
+The first build downloads the published engine; see [Build and test](#build-and-test) for the
+alternatives.
 
 The initial binding supports synchronous PyMongo 4.18 commands, including normal CRUD, cursors,
 aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,
@@ -172,27 +173,69 @@ cargo bench --bench operations
 
 ## Build and test
 
-MongoDB's pinned build requires Python 3.13, Bazel, C++20, and a supported compiler and linker. Its
-build documentation currently lists GCC 14.2 or Clang 19.1 and roughly 13 GB of free space.
+The engine is not compiled locally. `cargo build` downloads the library published for the
+current target, checks it against a SHA-256 committed in
+`embedded-mongodb-sys/prebuilt.rs`, and links that:
+
+```sh
+cargo test --all-targets
+```
+
+No submodule, no Bazel, no C++ toolchain. The download is cached outside the target
+directory — under `$XDG_CACHE_HOME/embedded-mongodb`, or `~/Library/Caches/embedded-mongodb`
+on macOS — so `cargo clean` does not throw it away.
+
+There are three modes, and the first match wins:
+
+1. `EMBEDDED_MONGODB_NATIVE_LIB_DIR=<dir>` — use the `libembedded_mongodb_native.so` in
+   `<dir>`, unconditionally. This is the answer for hermetic builds, air-gapped machines and
+   distribution packaging.
+2. `EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1` — compile the engine from the pinned submodule.
+   Hours, and about 13 GB of disk.
+3. Otherwise, download the library published for this target.
+
+`EMBEDDED_MONGODB_CACHE_DIR` moves the download cache, and `BAZEL` and
+`EMBEDDED_MONGODB_BAZEL_JOBS` apply to a source build. There is no way to skip the checksum.
+
+Two things to know before putting this behind a firewall. A plain `cargo build` now reaches
+both `github.com` and `release-assets.githubusercontent.com`, so a proxy allowlist naming
+only the first still fails. And `cargo build --offline` does **not** suppress the download —
+cargo does not pass that flag to build scripts — while `CARGO_NET_OFFLINE=1` does, and turns
+a missing cache entry into an error naming the file it wanted.
+
+The published Linux libraries are built on Ubuntu 24.04 and therefore need **glibc 2.39 or
+newer**; a source build has no such floor. Rather than failing at load time, `build.rs`
+compares the requirement against the host and stops the build with the remedy.
+
+### Building the engine from source
+
+Needed only to change the engine itself. MongoDB's pinned build requires Python 3.13, Bazel,
+C++20, and a supported compiler and linker. Its build documentation currently lists GCC 14.2
+or Clang 19.1 and roughly 13 GB of free space.
 
 ```sh
 git submodule update --init --depth 1
+./scripts/apply-mongo-patches
 
 cd mongo
 python3.13 buildscripts/install_bazel.py
 export PATH="$HOME/.local/bin:$PATH"
 cd ..
-cargo test --workspace
+EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo test --all-targets --release
 ```
 
-`embedded-mongodb-sys/build.rs` runs the pinned Bazel target and rebuilds it incrementally when
-the native sources change. Set `BAZEL` to use a Bazel executable outside `PATH`, or set
-`EMBEDDED_MONGODB_NATIVE_LIB_DIR` to skip Bazel and use a prebuilt library. Native compilation is
-limited to eight parallel jobs by default; override it with `EMBEDDED_MONGODB_BAZEL_JOBS`.
-Cargo-run tests and examples find it through the sys crate's build output; standalone binaries
-still need the shared library in the platform loader path.
+`embedded-mongodb-sys/build_native.rs` holds the Bazel invocation and rebuilds incrementally
+when the native sources change. Cargo-run tests and examples find the library through the sys
+crate's build output; standalone binaries still need it in the platform loader path.
 
-- **Release:** about 45 MB, or 33 MB with the patches in `patches/` applied.
+Changing anything the published library was built from — the submodule pin, `patches/`,
+`embedded-mongodb-sys/native/` or `build_native.rs` — makes the published library stale.
+`build.rs` detects that and refuses to use it, rather than linking an engine that no longer
+matches the source beside it. Publish a new one with `gh workflow run native.yml --ref
+<branch> -f publish=true`, which builds every target and commits the regenerated manifest.
+
+- **Release:** 33 MB, plus the statically linked C++ runtime. The exact figure for each
+  target is whatever the `native` workflow prints and records in the manifest.
 - **Debug:** about 1.4 GB.
 
 The release build is size-optimized rather than speed-optimized: `-Os`, link-time optimization,
@@ -205,7 +248,9 @@ and the network stack (0.9 MB), and fixes an assertion that aborted the host pro
 `hello` a driver sends. See
 [`docs/native-size-reduction.md`](docs/native-size-reduction.md) for the measurements and what
 further reduction would cost. Packed relative relocations require glibc 2.36 or newer.
-LTO is linked with `ld.bfd`, which must be on `PATH`; lld cannot read GCC's IR.
+LTO is linked with `ld.bfd`, which must be on `PATH`; lld cannot read GCC's IR. The C++ runtime
+is linked statically, which costs a couple of megabytes and keeps a published library's
+`GLIBCXX` requirement from following whichever toolchain happened to build it.
 
 ## Hard constraints
 

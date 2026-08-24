@@ -377,12 +377,39 @@ worst failure mode a library embedded in someone else's application can have.
   `patches/0002` guards the two logging sites in `client_metadata.cpp` and the one in
   `hello_auth.cpp`. This is what a driver sends first, so it hit the PyMongo bindings directly.
 
+## Publishing a build
+
+The engine is no longer compiled on a developer's machine: `cargo build` downloads the
+library published for the target and verifies it against a SHA-256 committed in
+`embedded-mongodb-sys/prebuilt.rs`. Changing the submodule pin, `patches/`,
+`embedded-mongodb-sys/native/` or `build_native.rs` makes that manifest stale, and `build.rs`
+refuses to use a library that no longer matches the source beside it.
+
+So every change measured in this document now ends the same way:
+
+```sh
+gh workflow run native.yml --ref <branch> -f publish=true
+```
+
+That builds all four targets, asserts each library's size against a per-target band, checks
+the Linux ones carry no `GLIBCXX`, `CXXABI` or `GCC_` version needs and no glibc requirement
+above 2.39, runs the test suite against the fresh library, publishes a release, and commits
+the regenerated manifest. The band in `.github/workflows/native.yml` is what turns a size
+regression into a failed build rather than a surprise, so a change that legitimately moves
+the number has to move the band with it.
+
+Note that the published libraries link the C++ runtime statically
+(`-static-libstdc++ -static-libgcc`). Every figure in this document predates that, so a
+published library is larger than the table below by whatever `libstdc++.a` contributes.
+Otherwise the floor would be set by whichever compiler the CI image happens to ship, and GCC
+14 already emits the highest `GLIBCXX` version manylinux_2_39 permits.
+
 ## Reproducing
 
 ```sh
 git submodule update --init --depth 1
 ./scripts/apply-mongo-patches          # 2.57 MB, plus a crash fix
-cargo build --release
+EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo build --release
 ```
 
 `embedded-mongodb-sys/build.rs` passes the flags above. To drive bazel directly:
