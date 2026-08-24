@@ -16,6 +16,11 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         jobs.parse::<usize>().is_ok_and(|jobs| jobs > 0),
         "EMBEDDED_MONGODB_BAZEL_JOBS must be a positive integer"
     );
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    // `mongo/.bazelrc` makes `compiler_type` a command-line flag alias, so the value passed
+    // below outranks `common:macos --//bazel/config:compiler_type=clang`. Falling back to
+    // "gcc" unconditionally therefore fed GCC-only flags into Apple clang.
+    let default_compiler_type = if target_os == "macos" { "clang" } else { "gcc" };
     let compiler_type = env::var("CXX")
         .or_else(|_| env::var("CC"))
         .map(|compiler| {
@@ -25,7 +30,7 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
                 "gcc"
             }
         })
-        .unwrap_or("gcc");
+        .unwrap_or(default_compiler_type);
     let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
 
     eprintln!("building embedded MongoDB with Bazel");
@@ -60,8 +65,8 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
             "--copt=-ffunction-sections",
             "--copt=-fdata-sections",
         ]);
-        match env::var("CARGO_CFG_TARGET_OS").as_deref() {
-            Ok("linux") => command.args([
+        match target_os.as_str() {
+            "linux" => command.args([
                 // Optimizing across the whole engine at link time is worth 7.4 MB. GCC puts
                 // its IR in the object files and only a linker carrying GCC's plugin can
                 // read it: lld has no such plugin, and handed these objects it links a
@@ -87,11 +92,27 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
                 // size accumulates; needs glibc 2.36 or newer at runtime.
                 "--linkopt=-Wl,-z,pack-relative-relocs",
             ]),
-            Ok("macos") => command.args(["--linkopt=-Wl,-x", "--linkopt=-Wl,-dead_strip"]),
+            "macos" => command.args([
+                "--linkopt=-Wl,-x",
+                "--linkopt=-Wl,-dead_strip",
+                // Bazel passes plain -shared with no -install_name, which leaves the raw
+                // relative bazel-out path in LC_ID_DYLIB -- and ld64 copies that string
+                // verbatim into every consumer's LC_LOAD_DYLIB. A consumer rewrites the id
+                // to an absolute path, which is much longer, so the Mach-O header needs
+                // slack: without it that rewrite fails with "larger updated load commands
+                // do not fit" and the only remedy is relinking the library.
+                "--linkopt=-Wl,-install_name,@rpath/libembedded_mongodb_native.so",
+                "--linkopt=-Wl,-headerpad_max_install_names",
+                // `common:macos -c dbg` in mongo/.bazelrc (SERVER-102959) is activated by
+                // --config=opt, which turns on --enable_platform_specific_config. Only a
+                // command-line compilation mode outranks an rcfile one.
+                "-c",
+                "opt",
+            ]),
             _ => &mut command,
         };
     }
-    let status = command
+    command
         .arg("--config=native_toolchain")
         .arg(format!("--compiler_type={compiler_type}"))
         .arg(format!("--local_resources=cpu={jobs}"))
@@ -101,15 +122,23 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         .arg("--disable_warnings_as_errors=True")
         .arg("--copt=-include")
         .arg("--copt=sys/syscall.h")
-        .arg("--copt=-fPIC")
-        .status()
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to run {}: {error}; install Bazel with \
-                 `python3.13 mongo/buildscripts/install_bazel.py` or set BAZEL",
-                PathBuf::from(&bazel).display()
-            )
-        });
+        .arg("--copt=-fPIC");
+    if target_os == "macos" {
+        // --config=native_toolchain sets --linker=lld, and CHOSEN_LINKER in
+        // mongo/bazel/toolchains/cc/mongo_native/mongo_native_toolchain.BUILD.tmpl has no
+        // //conditions:default arm. On macOS both linker_lld_valid_settings and
+        // linker_mold_valid_settings require not_macos, and linker_default requires
+        // linker=auto -- so lld matches nothing and Bazel fails during analysis. A
+        // command-line --linker outranks the one the config supplies.
+        command.arg("--linker=auto");
+    }
+    let status = command.status().unwrap_or_else(|error| {
+        panic!(
+            "failed to run {}: {error}; install Bazel with \
+             `python3.13 mongo/buildscripts/install_bazel.py` or set BAZEL",
+            PathBuf::from(&bazel).display()
+        )
+    });
     assert!(status.success(), "Bazel native build failed with {status}");
 
     mongo_root
