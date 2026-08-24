@@ -1,0 +1,128 @@
+#!/bin/sh
+# Assembles the THIRD-PARTY-NOTICES published beside the native library, and refuses to
+# produce one that does not account for everything actually linked.
+#
+#   scripts/collect-third-party-notices <link-params> <execroot> <mongo-dir> <output>
+#
+# <link-params> is the params file Bazel wrote for the link action, which lists every object
+# file that went in. That is the ground truth: it reflects the configuration that was really
+# built, so it cannot drift from the build flags the way a hand-kept list or a second Bazel
+# query would.
+#
+# Every package contributing an object must appear in scripts/third-party-dispositions.tsv.
+# An unlisted one is an error, so adding a dependency cannot ship without its licence.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+    echo "usage: $0 <link-params> <execroot> <mongo-dir> <output>" >&2
+    exit 2
+fi
+params=$1
+execroot=$2
+mongo=$3
+output=$4
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+dispositions="$repo_root/scripts/third-party-dispositions.tsv"
+upstream_notices="$mongo/distsrc/THIRD-PARTY-NOTICES"
+
+for required in "$params" "$dispositions" "$upstream_notices"; do
+    [ -f "$required" ] || { echo "missing $required" >&2; exit 1; }
+done
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# Only packages that contribute object files. Include paths and headers appear in the params
+# too, and a component whose headers were read but whose code was not linked carries no
+# distribution obligation.
+grep -oE '[^ ]*\.o$' "$params" \
+    | grep -oE '(src/third_party/[^/]+|external/[a-zA-Z0-9_.+~-]+)' \
+    | sed 's|~$||' | sort -u > "$work/linked"
+
+if [ ! -s "$work/linked" ]; then
+    echo "no object files found in $params; is it a link params file?" >&2
+    exit 1
+fi
+
+cp "$upstream_notices" "$work/notices"
+: > "$work/appendix"
+: > "$work/errors"
+appended=0
+next=900 # Numbering well clear of upstream's, which reaches the thirties.
+
+while read -r package; do
+    row=$(awk -F'\t' -v p="$package" '$1 == p { print; exit }' "$dispositions" || true)
+    if [ -z "$row" ]; then
+        printf 'unaccounted: %s is linked but not listed in %s\n' \
+            "$package" "${dispositions#"$repo_root"/}" >> "$work/errors"
+        continue
+    fi
+    disposition=$(printf '%s' "$row" | cut -f2)
+    detail=$(printf '%s' "$row" | cut -f3)
+
+    case $disposition in
+        ours) ;;
+        upstream)
+            # Prove the section is really there rather than trusting the table. Upstream
+            # regenerates this file, and a heading can be renamed or dropped by a bump.
+            grep -qiE "^ *[0-9]+\) *License [Nn]otice for .*$(printf '%s' "$detail" \
+                | sed 's/[][\.*^$/]/\\&/g')" "$work/notices" \
+                || printf 'missing section: %s claims "%s" in THIRD-PARTY-NOTICES\n' \
+                    "$package" "$detail" >> "$work/errors"
+            ;;
+        append)
+            text=""
+            for candidate in "$mongo/$detail" "$execroot/$detail" "$detail"; do
+                [ -f "$candidate" ] && { text=$candidate; break; }
+            done
+            if [ -z "$text" ]; then
+                printf 'missing licence text: %s expects %s\n' "$package" "$detail" \
+                    >> "$work/errors"
+                continue
+            fi
+            next=$((next + 1))
+            name=$(basename "$package")
+            {
+                printf '\n\n%d) License notice for %s\n' "$next" "$name"
+                printf -- '---------------------------------------\n\n'
+                cat "$text"
+            } >> "$work/appendix"
+            appended=$((appended + 1))
+            ;;
+        absent)
+            printf 'unexpectedly linked: %s (%s)\n' "$package" "$detail" >> "$work/errors"
+            ;;
+        review)
+            printf 'unresolved: %s (%s)\n' "$package" "$detail" >> "$work/errors"
+            ;;
+        *)
+            printf 'unknown disposition "%s" for %s\n' "$disposition" "$package" \
+                >> "$work/errors"
+            ;;
+    esac
+done < "$work/linked"
+
+if [ -s "$work/errors" ]; then
+    echo "cannot assemble THIRD-PARTY-NOTICES:" >&2
+    sed 's/^/  /' "$work/errors" >&2
+    echo >&2
+    echo "Resolve each above in ${dispositions#"$repo_root"/} before publishing." >&2
+    exit 1
+fi
+
+{
+    cat "$work/notices"
+    if [ "$appended" -gt 0 ]; then
+        cat <<'EOF'
+
+
+The notices below cover components linked into this library that MongoDB's own
+distribution does not include, and which therefore have no section above.
+EOF
+        cat "$work/appendix"
+    fi
+} > "$output"
+
+printf 'wrote %s: %s linked components, %s licence text(s) appended\n' \
+    "$output" "$(wc -l < "$work/linked" | tr -d ' ')" "$appended"

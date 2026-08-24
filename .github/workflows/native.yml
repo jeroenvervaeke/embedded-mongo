@@ -159,6 +159,7 @@ jobs:
           # -L: on Linux the entry in OUT_DIR is a symlink into the output base.
           cp -L "$out_dir/libembedded_mongodb_native.so" stage/libembedded_mongodb_native.so
           chmod 0644 stage/libembedded_mongodb_native.so
+          echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
       - name: Restore the macOS install name
         if: runner.os == 'macOS'
@@ -225,9 +226,24 @@ jobs:
             > "dist/${{ matrix.target }}.sha256"
           printf '%s' "${{ steps.floor.outputs.glibc_min }}" > "dist/${{ matrix.target }}.glibc"
 
-      - name: Collect the third-party notices
+      - name: Assemble the third-party notices
+        # x86_64 Linux only: the notices ship once, and this is the widest link. cpptrace and
+        # libdwarf are `target_compatible_with @platforms//os:linux`, and macOS subtracts from
+        # the component set rather than adding to it -- it drops the version script and LTO
+        # but pulls in nothing extra. A macOS-only third-party dependency would slip past
+        # this; nothing in native/BUILD.bazel has one today.
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cp mongo/distsrc/THIRD-PARTY-NOTICES dist/THIRD-PARTY-NOTICES
+        run: |
+          set -euo pipefail
+          # Bazel writes the link command to a params file beside the library, listing every
+          # object that went in. Reaching it through the OUT_DIR symlink keeps this honest:
+          # it is the configuration that was actually built, so it cannot drift from the
+          # flags in build_native.rs the way a second bazel query with its own flags could.
+          real=$(readlink -f "${{ steps.bazel.outputs.out_dir }}/libembedded_mongodb_native.so")
+          params=$(ls -t "$real"*.params 2>/dev/null | head -1)
+          test -n "$params" || { echo "no link params file beside $real" >&2; exit 1; }
+          ./scripts/collect-third-party-notices \
+            "$params" "${real%%/bazel-out/*}" mongo dist/THIRD-PARTY-NOTICES
 
       - uses: actions/upload-artifact@v4
         with:

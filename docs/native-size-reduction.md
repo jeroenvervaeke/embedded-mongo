@@ -398,6 +398,16 @@ the regenerated manifest. The band in `.github/workflows/native.yml` is what tur
 regression into a failed build rather than a surprise, so a change that legitimately moves
 the number has to move the band with it.
 
+The publish path also assembles THIRD-PARTY-NOTICES from the Bazel link command rather than
+copying MongoDB's, and fails when a linked component is unaccounted for. That gate is what
+found `cpptrace` (44 objects) and `libdwarf` (59) in the link with no notice covering them:
+MongoDB's inventory marks both as not distributed in release binaries, because they link them
+only in their own tooling. They are backtrace symbolization, which a library exposing five
+`extern "C"` entry points and no crash reporter cannot surface, so `build_native.rs` now
+passes `--//bazel/config:dev_stacktrace=False`. No patch was needed — upstream gates the
+dependency and every call site on that flag, and uses it themselves for `remote_unittest`.
+The size this returns is whatever the first published build reports.
+
 Note that the published libraries link the C++ runtime statically
 (`-static-libstdc++ -static-libgcc`). Every figure in this document predates that, so a
 published library is larger than the table below by whatever `libstdc++.a` contributes.

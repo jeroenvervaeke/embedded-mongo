@@ -56,6 +56,14 @@ Read the license before doing so.
 Third-party components
 ----------------------
 
-The engine statically links the third-party libraries upstream MongoDB uses.
-THIRD-PARTY-NOTICES, taken from the pinned submodule and published beside each
-binary, lists them and their licenses.
+The engine statically links third-party libraries. THIRD-PARTY-NOTICES,
+published beside each binary, covers them.
+
+That file is not a straight copy of MongoDB's own. Theirs describes what they
+distribute, and this library links a different set: it drops the components a
+server needs and no embedded engine does, and it reaches a few their release
+binaries never carry. So the file is assembled from the Bazel link command
+itself, which lists every object that went in, and the build fails if any
+linked component is unaccounted for. scripts/third-party-dispositions.tsv
+records how each one is covered, and scripts/collect-third-party-notices
+enforces it.
