@@ -22,7 +22,19 @@ for source in __init__.py client.py pool.py; do
     ln -sfn "$repo_root/python/pymongo_embedded/$source" "$package/$source"
 done
 
-native_dir="$repo_root/mongo/bazel-bin/external/mongot_localdev"
+# The extension records a bare `libembedded_mongodb_native.so` with no RUNPATH, so it needs
+# the loader pointed at whichever copy this build actually used. That is the one the build
+# script placed in OUT_DIR -- which nowadays is usually a downloaded library, not a bazel
+# output -- so ask the build tree rather than assuming.
+# Newest first: a target directory keeps the build output of every fingerprint it has ever
+# had, and an older one would be a different library.
+native_dir=${EMBEDDED_MONGODB_NATIVE_LIB_DIR:-$(dirname "$(ls -t \
+    "$repo_root"/target/release/build/embedded-mongodb-sys-*/out/libembedded_mongodb_native.so \
+    2>/dev/null | head -1)")}
+if [ ! -f "$native_dir/libembedded_mongodb_native.so" ]; then
+    echo "native library not found under target/release/build; run cargo build --release" >&2
+    exit 1
+fi
 case $(uname -s) in
     Darwin)
         extension="$repo_root/target/release/lib_native.dylib"
