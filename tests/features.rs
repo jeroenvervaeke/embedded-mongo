@@ -23,9 +23,12 @@ struct Row {
     score: i32,
 }
 
+/// A named group of assertions, run against one shared client.
+type Section = (&'static str, fn(&Client));
+
 /// Named so a crash inside the engine, which aborts the process without unwinding, still
 /// tells us which section it died in.
-const SECTIONS: &[(&str, fn(&Client))] = &[
+const SECTIONS: &[Section] = &[
     ("crud_commands", crud_commands),
     ("query_operators", query_operators),
     ("indexes", indexes),
@@ -77,7 +80,11 @@ fn crud_commands(client: &Client) {
             ],
         })
         .unwrap();
-    assert_eq!(updated.get_i32("n").unwrap(), 4, "update matched wrong count");
+    assert_eq!(
+        updated.get_i32("n").unwrap(),
+        4,
+        "update matched wrong count"
+    );
     assert_eq!(
         updated.get_array("upserted").unwrap().len(),
         1,
@@ -149,10 +156,18 @@ fn query_operators(client: &Client) {
 
     let count = |filter: Document| items.find(filter).unwrap().try_collect().unwrap().len();
 
-    assert_eq!(count(doc! { "score": { "$gt": 4, "$lte": 9 } }), 2, "$gt/$lte");
+    assert_eq!(
+        count(doc! { "score": { "$gt": 4, "$lte": 9 } }),
+        2,
+        "$gt/$lte"
+    );
     assert_eq!(count(doc! { "score": { "$in": [1, 12] } }), 2, "$in");
     assert_eq!(count(doc! { "score": { "$nin": [1, 12] } }), 2, "$nin");
-    assert_eq!(count(doc! { "$or": [{ "score": 1 }, { "score": 12 }] }), 2, "$or");
+    assert_eq!(
+        count(doc! { "$or": [{ "score": 1 }, { "score": 12 }] }),
+        2,
+        "$or"
+    );
     assert_eq!(
         count(doc! { "$and": [{ "score": { "$gt": 1 } }, { "tags": "blue" }] }),
         1,
@@ -161,7 +176,11 @@ fn query_operators(client: &Client) {
     assert_eq!(count(doc! { "score": { "$not": { "$lt": 9 } } }), 2, "$not");
     assert_eq!(count(doc! { "tags": { "$exists": true } }), 3, "$exists");
     assert_eq!(count(doc! { "tags": { "$size": 2 } }), 2, "$size");
-    assert_eq!(count(doc! { "tags": { "$all": ["red", "blue"] } }), 1, "$all");
+    assert_eq!(
+        count(doc! { "tags": { "$all": ["red", "blue"] } }),
+        1,
+        "$all"
+    );
     assert_eq!(
         count(doc! { "tags": { "$elemMatch": { "$eq": "green" } } }),
         1,
@@ -170,8 +189,16 @@ fn query_operators(client: &Client) {
     assert_eq!(count(doc! { "meta.ok": true }), 1, "dotted path");
     assert_eq!(count(doc! { "name": { "$type": "string" } }), 4, "$type");
     // $regex is PCRE2 inside the engine.
-    assert_eq!(count(doc! { "name": { "$regex": "^a", "$options": "i" } }), 1, "$regex");
-    assert_eq!(count(doc! { "$expr": { "$gt": ["$score", 8] } }), 2, "$expr");
+    assert_eq!(
+        count(doc! { "name": { "$regex": "^a", "$options": "i" } }),
+        1,
+        "$regex"
+    );
+    assert_eq!(
+        count(doc! { "$expr": { "$gt": ["$score", 8] } }),
+        2,
+        "$expr"
+    );
     assert_eq!(count(doc! { "score": { "$mod": [2, 1] } }), 3, "$mod");
 
     // Sort, skip, limit and projection travel on the find command rather than the helper.
@@ -263,7 +290,10 @@ fn indexes(client: &Client) {
         "hashed",
         "wildcard",
     ] {
-        assert!(names.contains(&expected.to_owned()), "index {expected} missing");
+        assert!(
+            names.contains(&expected.to_owned()),
+            "index {expected} missing"
+        );
     }
 
     // The unique index has to actually reject a duplicate, not merely exist.
@@ -271,7 +301,10 @@ fn indexes(client: &Client) {
         "insert": "docs",
         "documents": [{ "_id": 3, "email": "a@example.com" }],
     });
-    assert!(duplicate.is_err(), "unique index did not reject a duplicate");
+    assert!(
+        duplicate.is_err(),
+        "unique index did not reject a duplicate"
+    );
 
     // Text search and geo queries exercise the index implementations, not just their catalogs.
     let found = db
@@ -424,7 +457,11 @@ fn aggregation_stages(client: &Client) {
         .unwrap()
         .try_collect()
         .unwrap();
-    assert_eq!(grouped.len(), 2, "$group produced the wrong number of buckets");
+    assert_eq!(
+        grouped.len(),
+        2,
+        "$group produced the wrong number of buckets"
+    );
     assert_eq!(grouped[0].get_str("_id").unwrap(), "eu");
     assert_eq!(grouped[0].get_i32("revenue").unwrap(), 475);
     assert_eq!(grouped[0].get_array("products").unwrap().len(), 2, "$push");
@@ -483,9 +520,17 @@ fn aggregation_stages(client: &Client) {
         .try_collect()
         .unwrap();
     let facet = &faceted[0];
-    assert_eq!(facet.get_array("by_region").unwrap().len(), 2, "$sortByCount");
+    assert_eq!(
+        facet.get_array("by_region").unwrap().len(),
+        2,
+        "$sortByCount"
+    );
     assert_eq!(facet.get_array("bucketed").unwrap().len(), 2, "$bucket");
-    assert_eq!(facet.get_array("top").unwrap().len(), 1, "$facet sub-pipeline");
+    assert_eq!(
+        facet.get_array("top").unwrap().len(),
+        1,
+        "$facet sub-pipeline"
+    );
 
     // Reshaping stages.
     let reshaped = sales
@@ -566,7 +611,11 @@ fn aggregation_expressions(client: &Client) {
     let row = &computed[0];
     assert_eq!(row.get_str("upper").unwrap(), "KEYBOARD", "$toUpper");
     assert_eq!(row.get_str("sliced").unwrap(), "key", "$substrCP");
-    assert_eq!(row.get_str("concatenated").unwrap(), "eu-keyboard", "$concat");
+    assert_eq!(
+        row.get_str("concatenated").unwrap(),
+        "eu-keyboard",
+        "$concat"
+    );
     assert_eq!(row.get_str("conditional").unwrap(), "many", "$cond");
     assert_eq!(row.get_str("switched").unwrap(), "europe", "$switch");
     assert_eq!(row.get_i32("bound").unwrap(), 7, "$let");
@@ -614,8 +663,14 @@ fn aggregation_output_stages(client: &Client) {
         .find_one(doc! { "_id": "eu" })
         .unwrap()
         .unwrap();
-    assert!(merged.contains_key("units"), "$merge did not merge the field");
-    assert!(merged.contains_key("revenue"), "$merge dropped the existing field");
+    assert!(
+        merged.contains_key("units"),
+        "$merge did not merge the field"
+    );
+    assert!(
+        merged.contains_key("revenue"),
+        "$merge dropped the existing field"
+    );
 }
 
 /// Every BSON type has to survive a round trip through the storage engine, including
@@ -781,7 +836,10 @@ fn collection_administration(client: &Client) {
     );
 
     let validated = db.run_command(&doc! { "validate": "view_source" }).unwrap();
-    assert!(validated.get_bool("valid").unwrap(), "validate reported corruption");
+    assert!(
+        validated.get_bool("valid").unwrap(),
+        "validate reported corruption"
+    );
 
     client
         .run_command(
@@ -834,7 +892,10 @@ fn error_paths(client: &Client) {
         "pipeline": [{ "$notAStage": {} }],
         "cursor": {},
     });
-    assert!(bad_pipeline.is_err(), "unknown aggregation stage was accepted");
+    assert!(
+        bad_pipeline.is_err(),
+        "unknown aggregation stage was accepted"
+    );
 
     // Reading a collection that does not exist is empty, not an error.
     let missing = db
