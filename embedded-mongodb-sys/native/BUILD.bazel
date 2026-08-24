@@ -96,7 +96,6 @@ cc_binary(
         "@//src/mongo/db/storage:storage_engine_lock_file",
         "@//src/mongo/db/storage:storage_options",
         "@//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
-        "@//src/mongo/dbtests:mocklib",
         "@//src/mongo/rpc",
         "@//src/mongo/util:periodic_runner_factory",
         # Registers the build's version information. Without it any command that

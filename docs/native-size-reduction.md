@@ -2,7 +2,7 @@
 
 Goal: ship the engine inside a Java library. Target 25 MB, hard ceiling 50 MB.
 
-The release library is **33,999,424 bytes**, down from 147,116,136 when this work started
+The release library is **33,139,904 bytes**, down from 147,116,136 when this work started
 (−77%). It is under the 50 MB ceiling.
 
 Two configurations are supported, and both pass `cargo test --release --all-targets`:
@@ -10,10 +10,10 @@ Two configurations are supported, and both pass `cargo test --release --all-targ
 | | Size | vs. previous round |
 | --- | --- | --- |
 | Build flags only | 44,885,600 | −17.2% |
-| With the patches in `patches/` | **33,999,424** | −37.3% |
+| With the patches in `patches/` | **33,139,904** | −38.7% |
 
 The patched build drops the collation data for 85 locales, the slot-based execution engine, the
-replication implementation and the sharding runtime.
+replication implementation, the sharding runtime and the network stack.
 The classic execution engine runs every query either could; what is lost with SBE is Atlas
 `$search`, change-stream post-image lookup, the join optimizer and sampling-based cardinality
 estimation, none of which an in-process single-node engine can use.
@@ -40,7 +40,8 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
 | SBE removal (`patches/0003`) | 37,568,416 | −4.75 MB |
 | replication implementation (`patches/0004`) | 36,457,664 | −1.11 MB |
-| sharding runtime (`patches/0005`) | **33,999,424** | −2.46 MB |
+| sharding runtime (`patches/0005`) | 33,999,424 | −2.46 MB |
+| network stack (`patches/0006`) | **33,139,904** | −0.86 MB |
 
 By section:
 
@@ -321,21 +322,45 @@ structural to the shard role itself rather than an optional layer above it. Remo
 replacing `CollectionMetadata`, which is a different and much larger job than replacing the
 sharding state that wraps it.
 
+## Removing the network stack
+
+`patches/0006-drop-the-network-stack.patch`, worth **859,520 bytes**.
+
+An in-process engine has no sockets. Commands arrive through `DBDirectClient` and are dispatched
+over OpMsg in memory, so `clientdriver_network`, `network_interface_tl`, `network_interface_factory`,
+the transport layer and the connection pools are all dead weight — but they were reachable, so
+LTO kept them.
+
+Stripping those deps took nine iterations, and every surviving reference turned out to belong to
+something already cut: the remote oplog interface used by replication's `bgsync`, primary-only
+services (which run replication and sharding workflows), `$search`'s mongot executors, sharded
+query sampling, query-settings backfill, and initial sync's client factory. Those raise
+`ErrorCodes::IllegalOperation`. `remote_command_targeter` was the last strand holding
+`clientdriver_network`, and with it went the replica-set monitor and server discovery.
+
+One trap. `$search`'s task executors live in a `State` that is a `ServiceContext` decoration,
+constructed for every engine. Throwing from its constructor breaks every `Client::new`, not just
+`$search`. It is a no-op instead, leaving the executors null so only an actual `$search` fails.
+This is the same shape as the initializer-graph failure under sharding: a linker cannot see it,
+and `tests/features.rs` is what catches it.
+
 ## What is left
 
-**The network stack** (−1.24 MB before the sharding cut) was held up by
-`grid/shard_registry`, `remote_command_targeter`, `sharding_initialization` and
-`query_analysis_writer`. Some of that is now gone; the rest sits behind `common_s`, so it is
-worth re-measuring rather than assuming.
+**Authentication** was measured and rejected. Its boundary stays at 20 symbols however it is
+sliced, and it runs through the authorization checks generated into every command —
+`AuthorizationSession::get`, `Privilege`, `ResourcePattern`, `AuthorizationContract`. The widest
+version also wants `auth::ValidatedTenancyScopeFactory::create`, which this library's own
+`runCommand` calls. `src/mongo/crypto` has to stay regardless: `evaluate_hash` backs an
+aggregation expression. That leaves roughly half a megabyte in exchange for surgery on the path
+every command takes, which is the worst return on risk here.
 
-**Authentication** (−0.99 MB) is not an optional subsystem here. `AuthorizationSession::get`,
-`Privilege` and `ResourcePattern` are referenced from the generated code of every command —
-`write_ops_gen`, `kill_cursors_gen`, `cursor_response` — so removing it means stubbing
-authorization across the whole command surface.
+**`src/mongo/s`** stays for the reason given above: `CollectionMetadata` is built on
+`ChunkManager`.
 
 Below that, no remaining bazel target exceeds 2.3 MB. Intel decimal128 is 2.07 MB and
-WiredTiger 1.94 MB, both required. 25 MB still means cutting the aggregation pipeline, and with
-it `embedded_mongodb::Collection::aggregate` from this crate's public API.
+WiredTiger 1.94 MB, both required. Reaching 25 MB now means removing database features —
+aggregation, the geo and text index types, timeseries — rather than infrastructure, which is a
+different kind of decision from everything above.
 
 ## Two crashes this work found
 
