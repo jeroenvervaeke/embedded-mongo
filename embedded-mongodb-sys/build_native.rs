@@ -42,7 +42,17 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         .arg(format!(
             "--override_repository=mongot_localdev={}",
             crate_root.join("native").display()
-        ));
+        ))
+        // An in-process engine has no network, so the TLS stack and the gRPC/protobuf tree
+        // behind it are dead weight, as are OpenTelemetry export and the enterprise-only
+        // modules. These pick which engine gets built rather than how well it is optimized,
+        // so they apply to every profile: a debug build is for reproducing a release bug,
+        // which only works if both link the same engine.
+        .args([
+            "--//bazel/config:ssl=False",
+            "--//bazel/config:build_otel=False",
+            "--//bazel/config:build_enterprise=False",
+        ]);
     if release {
         // MongoDB marks nearly every cc_library `alwayslink`, so the linker is handed every
         // object and can only drop whole sections it proves unreachable. Per-function and
@@ -53,12 +63,6 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
             // Size, not speed, is the binding constraint on a library that ships inside
             // someone else's application bundle.
             "--//bazel/config:opt=size",
-            // An in-process engine has no network, so the TLS stack and the gRPC/protobuf
-            // tree behind it are dead weight, as are OpenTelemetry export and the
-            // enterprise-only modules.
-            "--//bazel/config:ssl=False",
-            "--//bazel/config:build_otel=False",
-            "--//bazel/config:build_enterprise=False",
             "--fission=no",
             "--debug_symbols=False",
             "--copt=-fvisibility=hidden",
