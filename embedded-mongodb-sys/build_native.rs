@@ -52,6 +52,16 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
             "--//bazel/config:ssl=False",
             "--//bazel/config:build_otel=False",
             "--//bazel/config:build_enterprise=False",
+            // Symbolized backtraces, which this library has no way to surface: it exposes
+            // five extern "C" entry points and no crash reporter. Turning them off drops
+            // cpptrace and libdwarf, the only two linked components MongoDB's own
+            // THIRD-PARTY-NOTICES does not cover -- their table marks both as not
+            // distributed in release binaries. libdwarf is LGPL-2.1, whose relink
+            // obligation a stripped, LTO'd, version-scripted static library cannot
+            // discharge. Upstream supports this switch and uses it themselves in
+            // `common:remote_unittest`; every call site is behind
+            // `#ifdef MONGO_CONFIG_DEV_STACKTRACE`, which the same config sets.
+            "--//bazel/config:dev_stacktrace=False",
         ]);
     if release {
         // MongoDB marks nearly every cc_library `alwayslink`, so the linker is handed every
