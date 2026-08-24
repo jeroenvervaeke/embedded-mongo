@@ -2,16 +2,20 @@
 
 Goal: ship the engine inside a Java library. Target 25 MB, hard ceiling 50 MB.
 
-The release library is **42,317,408 bytes**, down from 147,116,136 when this work started
-(−71%). It is under the 50 MB ceiling. No engine functionality was removed to get there:
-the only thing dropped is collation data for 85 locales, and only in the patched build.
+The release library is **37,568,416 bytes**, down from 147,116,136 when this work started
+(−74%). It is under the 50 MB ceiling.
 
 Two configurations are supported, and both pass `cargo test --release --all-targets`:
 
 | | Size | vs. previous round |
 | --- | --- | --- |
 | Build flags only | 44,885,600 | −17.2% |
-| With the patches in `patches/` | **42,317,408** | −21.9% |
+| With the patches in `patches/` | **37,568,416** | −30.7% |
+
+The patched build drops the collation data for 85 locales and the slot-based execution engine.
+The classic execution engine runs every query either could; what is lost with SBE is Atlas
+`$search`, change-stream post-image lookup, the join optimizer and sampling-based cardinality
+estimation, none of which an in-process single-node engine can use.
 
 All sizes are bytes from `stat -c%s`, on `x86_64-linux`, gcc 16.2.1, GNU ld 2.46, lld 22.1.8,
 glibc 2.43. The intermediate steps below were measured on gcc 16.1.1, before a system upgrade
@@ -32,7 +36,8 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | — rebuilt here on gcc 16.1.1 — | 54,216,296 | |
 | `--version-script`, exporting only the five entry points | 52,496,088 | −1.72 MB |
 | GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
-| ICU collation trim (`patches/0001`) | **42,317,408** | −2.57 MB |
+| ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
+| SBE removal (`patches/0003`) | **37,568,416** | −4.75 MB |
 
 By section:
 
@@ -201,60 +206,81 @@ removed.
 Add `-Wl,-Map=/tmp/link.map` for per-object attribution. The map is ~116 MB; aggregate it on
 the `_objs/<target>/` path component rather than reading it.
 
-## What is left, and why cutting subsystems does not work
+## Removing the slot-based execution engine
 
-The obvious next step is to remove what an embedded single-node engine cannot use: the
-slot-based execution engine, sharding, replication, authentication, the network stack. Those
-were each measured, and the answer is that build configuration cannot deliver any of them.
+`patches/0003-remove-the-slot-based-execution-engine.patch`, worth **4,748,992 bytes**.
 
-Their ceilings are real. Dropping each subsystem's objects from the LTO link while permitting
-the resulting dangling references, against a 42,317,408 baseline:
+MongoDB carries two query execution engines. The classic one runs everything; the slot-based
+one (SBE) is an alternative the planner may choose for some shapes. An embedded engine needs
+one of them, and the classic engine is the one nothing else depends on.
 
-| Cut | Result | Ceiling |
-| --- | --- | --- |
-| SBE | 36,960,704 | −5.36 MB |
-| sharding + routing | 37,581,824 | −4.74 MB |
-| replication | 40,108,256 | −2.21 MB |
-| network stack | 41,073,280 | −1.24 MB |
-| auth + crypto | 41,330,624 | −0.99 MB |
+Nothing in this can be done by build configuration, and three cheaper mechanisms were tried
+first and failed. **Dropping unreferenced objects buys nothing**: 120 of SBE's 126 objects are
+genuinely referenced, worth 22,624 bytes, because the planner calls into `stage_builder`
+unconditionally and picks an engine at run time. **Following the reference cascade destroys the
+engine**: seeding SBE's objects and repeatedly adding everything that references something
+already dropped converges on 481 objects, including 80 in core `src/mongo/db`, 91 in `db/s` and
+22 in `db/commands`. **Constant-folding the engine choice does nothing**: `QueryKnobConfiguration`
+reaches the executor through one generated accessor, and shadowing it with a constant
+`kForceClassicEngine` rebuilt 158 translation units and produced a library of exactly the same
+size, because SBE stays reachable through the plan cache, `plan_executor_factory` and explain.
 
-Those are ceilings, not savings, and three separate mechanisms fail to reach them.
+What works is severing the call graph, and the boundary is narrower than it looks. Removing
+16 SBE sources and 3 SBE deps from `query_exec` leaves only **6 undefined symbols**. Chasing
+those, and then the routes that reappear, converged in nine build iterations:
 
-**Dropping unreferenced objects buys almost nothing**, because LTO already did it. Rebuilding
-each subsystem's minimal link-clean subset — drop the whole thing, add back only the objects
-that define symbols the link then reports undefined — leaves 120 of SBE's 126 objects in place,
-worth 22,624 bytes. Sharding is the exception at −2.97 MB, and that is pre-LTO; LTO collects the
-same code.
+| Change | |
+| --- | --- |
+| `db/BUILD.bazel` | 16 SBE sources and 3 deps out of `query_exec` |
+| `pipeline/BUILD.bazel` | 2 dep edges on the SBE single-document lookup executor |
+| `get_executor.cpp` | 5 call sites |
+| `plan_executor_factory.cpp` | both SBE executor factories |
+| `explain.cpp` | printing SBE plan-cache entries |
+| `join/executor.cpp` | the join optimizer's SBE lowering |
+| `sampling_estimator_impl.cpp` | sampling cardinality estimation's SBE execution |
+| change-stream post-image, `$search` id lookup | take the non-SBE path already beside them |
+| two IDL defaults | see below |
 
-**Following the reference cascade destroys the engine.** Seeding SBE's 126 objects and
-repeatedly adding every object that references something already dropped converges on **481
-objects**, including 80 in core `src/mongo/db`, 91 in `db/s` and 22 in `db/commands`.
+No stub was written. Every severed path either had a classic sibling sitting in the same
+function — `ExpressSingleDocumentLookupExecutor` for the two lookups — or belongs to a feature
+an embedded engine cannot reach anyway: Atlas `$search`, change-stream post-images, the join
+optimizer, sampling-based cardinality estimation. Those raise
+`QueryFeatureNotAllowed` with a message naming this document rather than crashing.
 
-**Constant-folding the engine choice does nothing.** `QueryKnobConfiguration` reaches the
-executor through one generated accessor, so shadowing it with a constant `kForceClassicEngine`
-makes every engine-choice branch provably dead and should let LTO strip SBE for free. It
-rebuilt 158 translation units and produced a library of *exactly the same size*, because SBE
-stays reachable through the plan cache, `plan_executor_factory` and explain. Forcing the
-classic engine at runtime costs query performance and saves nothing, so it was reverted too.
+Two defaults have to move, and the second is not optional:
+`internalQueryFrameworkControl` to `forceClassicEngine`, and
+`featureFlagGetExecutorDeferredEngineChoice` to false. That flag defaults **true**, so deferred
+engine choice is the ordinary path for find; leaving it on makes every find query throw. IDL
+then rejects a false default in the `rollout` phase, so the flag moves to `in_development` too.
 
-What would work is a fork. Only 23 objects outside SBE reference it, and most are themselves
-SBE-specific (`plan_executor_sbe`, `plan_explainer_sbe`, `sbe_trial_runtime_executor`, the
-deferred-engine-choice planners); the genuinely shared ones are about nine files that branch on
-the engine and would have to be patched to take the classic path unconditionally. Note that
-five of the 23 are histogram and cardinality-estimation files using `sbe::value` purely as a
-data representation, so `sbe_values` has to stay whatever else goes.
+Two things that look like SBE and are not. `sbe_values` stays: histogram and cardinality
+estimation code uses `sbe::value` as a data representation, unrelated to the engine. And
+`trial_period_utils.cpp` is classic code that upstream packages *inside* the SBE `stage_builder`
+target, so removing that target takes it away from classic's `multi_plan.cpp`; the patch adds
+the file back to `query_exec` directly.
 
-That is a fork of MongoDB's query execution layer, carried against a pinned submodule,
-re-applied on every bump, in the code path this crate's users exercise most. The other four
-subsystems each need their own, and sharding's is worse because `shard_role` is on every
-collection access. Worth roughly 14 MB if all five landed. Not attempted.
+This is a fork of the query execution layer and it will need reapplying, probably by hand, on
+every submodule bump. `tests/features.rs` is what says whether it still works.
 
-Below that, no remaining bazel target exceeds 2.3 MB. By directory the largest are
-`src/mongo/db` 5.16 MB, `db/pipeline` 3.85 MB, sharding 3.40 MB, SBE 2.85 MB, `db/repl`
-1.69 MB. Intel decimal128 is 2.07 MB and WiredTiger 1.94 MB, both required.
+## What is left
 
-25 MB still means cutting the query engine, and with it
-`embedded_mongodb::Collection::aggregate` from this crate's public API.
+The same measurement for the other subsystems, dropping each one's objects from the LTO link
+while permitting the resulting dangling references, against the 42,317,408 build:
+
+| Cut | Ceiling |
+| --- | --- |
+| sharding + routing | −4.74 MB |
+| replication | −2.21 MB |
+| network stack | −1.24 MB |
+| auth + crypto | −0.99 MB |
+
+Each needs its own fork of the same shape. Sharding's is the worst of them: `shard_role` is on
+every collection access, so the boundary runs through the storage path rather than around a
+redundant subsystem, and unlike SBE there is no classic sibling waiting on the other side.
+
+Below that, no remaining bazel target exceeds 2.3 MB. Intel decimal128 is 2.07 MB and
+WiredTiger 1.94 MB, both required. 25 MB still means cutting the aggregation pipeline, and with
+it `embedded_mongodb::Collection::aggregate` from this crate's public API.
 
 ## Two crashes this work found
 
