@@ -2,18 +2,18 @@
 
 Goal: ship the engine inside a Java library. Target 25 MB, hard ceiling 50 MB.
 
-The release library is **36,457,664 bytes**, down from 147,116,136 when this work started
-(−75%). It is under the 50 MB ceiling.
+The release library is **33,999,424 bytes**, down from 147,116,136 when this work started
+(−77%). It is under the 50 MB ceiling.
 
 Two configurations are supported, and both pass `cargo test --release --all-targets`:
 
 | | Size | vs. previous round |
 | --- | --- | --- |
 | Build flags only | 44,885,600 | −17.2% |
-| With the patches in `patches/` | **36,457,664** | −32.8% |
+| With the patches in `patches/` | **33,999,424** | −37.3% |
 
-The patched build drops the collation data for 85 locales, the slot-based execution engine and
-the replication implementation.
+The patched build drops the collation data for 85 locales, the slot-based execution engine, the
+replication implementation and the sharding runtime.
 The classic execution engine runs every query either could; what is lost with SBE is Atlas
 `$search`, change-stream post-image lookup, the join optimizer and sampling-based cardinality
 estimation, none of which an in-process single-node engine can use.
@@ -39,7 +39,8 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
 | ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
 | SBE removal (`patches/0003`) | 37,568,416 | −4.75 MB |
-| replication implementation (`patches/0004`) | **36,457,664** | −1.11 MB |
+| replication implementation (`patches/0004`) | 36,457,664 | −1.11 MB |
+| sharding runtime (`patches/0005`) | **33,999,424** | −2.46 MB |
 
 By section:
 
@@ -281,34 +282,56 @@ entry types that `OpObserverImpl` reaches on every write, replication settings, 
 replicated-fast-count machinery. Only the implementation of an actual replica set member goes:
 elections, heartbeats, initial sync, rollback.
 
-## What is left, and why
+## Removing the sharding runtime
 
-Sharding, the network stack and authentication were each taken to the point where the exact
-blocker is known. None is a matter of effort alone.
+`patches/0005-drop-the-sharding-runtime.patch`, worth **2,458,240 bytes**, plus the standalone
+sharding state in `embedded-mongodb-sys/native/embedded_mongodb_native.cpp`.
 
-**Sharding** (−4.74 MB) has a genuine 20-symbol boundary in 4 files — `ShardKeyPattern`,
-`ChunkManager`/`CollectionRoutingInfo`, `Grid::get` and stale-config plumbing, reached from
-change-stream topology handling, the two timeseries write stages and the pipeline process
-interface. All four were patched successfully. The wall is elsewhere:
-`embedded_mongodb_native.cpp` constructs `CollectionShardingStateFactoryShard` and
-`DatabaseShardingStateFactoryShard`, whose sources are compiled into the `db/s` target, and
-keeping just those objects cascades straight back into the sharding runtime. Landing this means
-writing an unsharded `CollectionShardingState` implementation — 12 virtuals, invoked on every
-collection access. That is new code in the hottest path, where a mistake corrupts data instead
-of failing cleanly, so it was left undone rather than half done. Note also that keeping the
-link-clean subset instead is worth −2.97 MB before LTO and close to nothing after it, since LTO
-already drops what nothing references.
+This one needed code, not just patches. The shard role asks every collection and database access
+for its sharding state, and MongoDB's implementations live in the sharding runtime. There is no
+standalone implementation to fall back on, so the library now carries its own — and the
+interfaces turned out small: **7 pure virtuals** on `CollectionShardingState` and **4** on
+`DatabaseShardingState`, each with an honest answer for a single node that owns all of its data.
+A default-constructed `CollectionMetadata` is untracked, so one shared instance serves every
+description and ownership filter; nothing is versioned, so the version checks are no-ops and the
+stale-metadata handlers return `boost::none`. This is not a stub that throws: it is what the
+sharding state of an embedded engine actually is.
 
-**The network stack** (−1.24 MB) is held up entirely by sharding: dropping
-`clientdriver_network`, `network_interface_tl`, `connection_pool_tl` and
-`network_interface_factory` leaves 20 undefined symbols, referenced from `grid/shard_registry`,
-`remote_command_targeter`, `sharding_initialization` and `query_analysis_writer`. Cut sharding
-and most of this follows; before that there is nothing to cut.
+With the factories in hand, `//src/mongo/db/s:sharding_runtime_d` was stripped from every
+BUILD file that named it. That left exactly one undefined symbol,
+`sharding::awaitShardRoleReady`, called from a retry path in `service_entry_point_shard_role.cpp`
+that only fires on `ShardingStateNotInitialized` — which this build can no longer raise.
+
+Then the failure the linker cannot catch. The library linked cleanly and died on `Client::new`
+with `BadValue: node PrimaryOnlyServiceRegistry depends on missing node
+ShardingInitializationMongoDRegistry`: deleting the sharding runtime deleted the initializer that
+registers that node, while a dependency on it remained. `native/` now registers an empty
+initializer under that name. This is exactly the hazard recorded under lazy linking below, met
+for real, and `tests/features.rs` is the only thing that found it.
+
+The four files that reference sharding types across the new boundary — change-stream topology
+handling, both timeseries write stages, and the pipeline process interface — take
+`ErrorCodes::IllegalOperation`. All of them are sharded-only paths.
+
+### Where it stops
+
+`src/mongo/s` stays, about 198 objects and mostly `common_s`. `CollectionMetadata`, the type
+every collection description returns, is built on `ChunkManager`, so the routing types are
+structural to the shard role itself rather than an optional layer above it. Removing them means
+replacing `CollectionMetadata`, which is a different and much larger job than replacing the
+sharding state that wraps it.
+
+## What is left
+
+**The network stack** (−1.24 MB before the sharding cut) was held up by
+`grid/shard_registry`, `remote_command_targeter`, `sharding_initialization` and
+`query_analysis_writer`. Some of that is now gone; the rest sits behind `common_s`, so it is
+worth re-measuring rather than assuming.
 
 **Authentication** (−0.99 MB) is not an optional subsystem here. `AuthorizationSession::get`,
 `Privilege` and `ResourcePattern` are referenced from the generated code of every command —
 `write_ops_gen`, `kill_cursors_gen`, `cursor_response` — so removing it means stubbing
-authorization across the whole command surface. The price is wrong for the return.
+authorization across the whole command surface.
 
 Below that, no remaining bazel target exceeds 2.3 MB. Intel decimal128 is 2.07 MB and
 WiredTiger 1.94 MB, both required. 25 MB still means cutting the aggregation pipeline, and with
