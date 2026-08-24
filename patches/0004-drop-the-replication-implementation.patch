@@ -1,0 +1,66 @@
+diff --git a/src/mongo/db/rss/attached_storage/BUILD.bazel b/src/mongo/db/rss/attached_storage/BUILD.bazel
+index 4e0f8694..d1e3b4e4 100644
+--- a/src/mongo/db/rss/attached_storage/BUILD.bazel
++++ b/src/mongo/db/rss/attached_storage/BUILD.bazel
+@@ -34,7 +34,6 @@ mongo_cc_library(
+         "//src/mongo:base",
+         "//src/mongo/db:service_context",
+         "//src/mongo/db/admission:flow_control",
+-        "//src/mongo/db/repl:repl_coordinator_impl",
+         "//src/mongo/db/repl:serveronly_repl",
+         "//src/mongo/db/rss:replicated_storage_service",
+     ],
+diff --git a/src/mongo/db/rss/attached_storage/attached_service_lifecycle.cpp b/src/mongo/db/rss/attached_storage/attached_service_lifecycle.cpp
+index b12b4b2f..95ea4da7 100644
+--- a/src/mongo/db/rss/attached_storage/attached_service_lifecycle.cpp
++++ b/src/mongo/db/rss/attached_storage/attached_service_lifecycle.cpp
+@@ -27,24 +27,6 @@ ServiceContext::ConstructorActionRegisterer registerAttachedServiceLifecycle{
+         rss.setServiceLifecycle(std::make_unique<AttachedServiceLifecycle>());
+     }};
+ 
+-auto makeReplicationExecutor(ServiceContext* serviceContext) {
+-    auto hookList = std::make_unique<rpc::EgressMetadataHookList>();
+-    hookList->addHook(std::make_unique<rpc::VectorClockMetadataHook>(serviceContext));
+-    return executor::ThreadPoolTaskExecutor::create(
+-        ThreadPool::make({
+-            .poolName = "ReplCoordThreadPool",
+-            .threadNamePrefix = "ReplCoord-",
+-            .maxThreads = 50,
+-            .onCreateThread =
+-                [serviceContext](const std::string& threadName) {
+-                    Client::initThread(threadName,
+-                                       serviceContext->getService(),
+-                                       Client::noSession(),
+-                                       ClientOperationKillableByStepdown{false});
+-                },
+-        }),
+-        executor::makeNetworkInterface("ReplNetwork", nullptr, std::move(hookList)));
+-}
+ }  // namespace
+ 
+ void AttachedServiceLifecycle::initializeFlowControl(ServiceContext* svcCtx) {
+@@ -56,23 +38,7 @@ void AttachedServiceLifecycle::initializeStorageEngineExtensions(ServiceContext*
+ 
+ std::unique_ptr<repl::ReplicationCoordinator>
+ AttachedServiceLifecycle::initializeReplicationCoordinator(ServiceContext* svcCtx) {
+-    auto storageInterface = repl::StorageInterface::get(svcCtx);
+-    auto replicationProcess = repl::ReplicationProcess::get(svcCtx);
+-
+-    repl::TopologyCoordinator::Options topoCoordOptions;
+-    topoCoordOptions.maxSyncSourceLagSecs = Seconds(repl::maxSyncSourceLagSecs);
+-    topoCoordOptions.clusterRole = serverGlobalParams.clusterRole;
+-
+-    return std::make_unique<repl::ReplicationCoordinatorImpl>(
+-        svcCtx,
+-        getGlobalReplSettings(),
+-        std::make_unique<repl::ReplicationCoordinatorExternalStateImpl>(
+-            svcCtx, storageInterface, replicationProcess),
+-        makeReplicationExecutor(svcCtx),
+-        std::make_unique<repl::TopologyCoordinator>(topoCoordOptions),
+-        replicationProcess,
+-        storageInterface,
+-        SecureRandom().nextInt64());
++    uasserted(ErrorCodes::IllegalOperation, "this build links no replication implementation; the embedded server installs ReplicationCoordinatorMock -- see docs/native-size-reduction.md");
+ }
+ 
+ void AttachedServiceLifecycle::initializeStateRequiredForStorageAccess(ServiceContext*) {}

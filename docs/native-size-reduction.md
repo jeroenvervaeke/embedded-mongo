@@ -2,17 +2,18 @@
 
 Goal: ship the engine inside a Java library. Target 25 MB, hard ceiling 50 MB.
 
-The release library is **37,568,416 bytes**, down from 147,116,136 when this work started
-(−74%). It is under the 50 MB ceiling.
+The release library is **36,457,664 bytes**, down from 147,116,136 when this work started
+(−75%). It is under the 50 MB ceiling.
 
 Two configurations are supported, and both pass `cargo test --release --all-targets`:
 
 | | Size | vs. previous round |
 | --- | --- | --- |
 | Build flags only | 44,885,600 | −17.2% |
-| With the patches in `patches/` | **37,568,416** | −30.7% |
+| With the patches in `patches/` | **36,457,664** | −32.8% |
 
-The patched build drops the collation data for 85 locales and the slot-based execution engine.
+The patched build drops the collation data for 85 locales, the slot-based execution engine and
+the replication implementation.
 The classic execution engine runs every query either could; what is lost with SBE is Atlas
 `$search`, change-stream post-image lookup, the join optimizer and sampling-based cardinality
 estimation, none of which an in-process single-node engine can use.
@@ -37,7 +38,8 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | `--version-script`, exporting only the five entry points | 52,496,088 | −1.72 MB |
 | GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
 | ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
-| SBE removal (`patches/0003`) | **37,568,416** | −4.75 MB |
+| SBE removal (`patches/0003`) | 37,568,416 | −4.75 MB |
+| replication implementation (`patches/0004`) | **36,457,664** | −1.11 MB |
 
 By section:
 
@@ -262,21 +264,51 @@ the file back to `query_exec` directly.
 This is a fork of the query execution layer and it will need reapplying, probably by hand, on
 every submodule bump. `tests/features.rs` is what says whether it still works.
 
-## What is left
+## Removing the replication implementation
 
-The same measurement for the other subsystems, dropping each one's objects from the LTO link
-while permitting the resulting dangling references, against the 42,317,408 build:
+`patches/0004-drop-the-replication-implementation.patch`, worth **1,110,752 bytes**, and the
+smallest patch here: one function body and one dep edge.
 
-| Cut | Ceiling |
-| --- | --- |
-| sharding + routing | −4.74 MB |
-| replication | −2.21 MB |
-| network stack | −1.24 MB |
-| auth + crypto | −0.99 MB |
+The embedded server already installs `ReplicationCoordinatorMock` itself and sets follower mode
+to primary, in `embedded_mongodb_native.cpp`. The real `ReplicationCoordinatorImpl` arrived
+anyway, because `AttachedServiceLifecycle::initializeReplicationCoordinator` constructs one and
+that lifecycle is linked. Nothing calls it here. The patch replaces its body, drops the thread
+pool and network interface that existed only to feed it, and removes
+`//src/mongo/db/repl:repl_coordinator_impl` from `db/rss/attached_storage`. It linked first try.
 
-Each needs its own fork of the same shape. Sharding's is the worst of them: `shard_role` is on
-every collection access, so the boundary runs through the storage path rather than around a
-redundant subsystem, and unlike SBE there is no classic sibling waiting on the other side.
+What stays is everything standalone still needs: the coordinator interface, the mocks, oplog
+entry types that `OpObserverImpl` reaches on every write, replication settings, and the
+replicated-fast-count machinery. Only the implementation of an actual replica set member goes:
+elections, heartbeats, initial sync, rollback.
+
+## What is left, and why
+
+Sharding, the network stack and authentication were each taken to the point where the exact
+blocker is known. None is a matter of effort alone.
+
+**Sharding** (−4.74 MB) has a genuine 20-symbol boundary in 4 files — `ShardKeyPattern`,
+`ChunkManager`/`CollectionRoutingInfo`, `Grid::get` and stale-config plumbing, reached from
+change-stream topology handling, the two timeseries write stages and the pipeline process
+interface. All four were patched successfully. The wall is elsewhere:
+`embedded_mongodb_native.cpp` constructs `CollectionShardingStateFactoryShard` and
+`DatabaseShardingStateFactoryShard`, whose sources are compiled into the `db/s` target, and
+keeping just those objects cascades straight back into the sharding runtime. Landing this means
+writing an unsharded `CollectionShardingState` implementation — 12 virtuals, invoked on every
+collection access. That is new code in the hottest path, where a mistake corrupts data instead
+of failing cleanly, so it was left undone rather than half done. Note also that keeping the
+link-clean subset instead is worth −2.97 MB before LTO and close to nothing after it, since LTO
+already drops what nothing references.
+
+**The network stack** (−1.24 MB) is held up entirely by sharding: dropping
+`clientdriver_network`, `network_interface_tl`, `connection_pool_tl` and
+`network_interface_factory` leaves 20 undefined symbols, referenced from `grid/shard_registry`,
+`remote_command_targeter`, `sharding_initialization` and `query_analysis_writer`. Cut sharding
+and most of this follows; before that there is nothing to cut.
+
+**Authentication** (−0.99 MB) is not an optional subsystem here. `AuthorizationSession::get`,
+`Privilege` and `ResourcePattern` are referenced from the generated code of every command —
+`write_ops_gen`, `kill_cursors_gen`, `cursor_response` — so removing it means stubbing
+authorization across the whole command surface. The price is wrong for the return.
 
 Below that, no remaining bazel target exceeds 2.3 MB. Intel decimal128 is 2.07 MB and
 WiredTiger 1.94 MB, both required. 25 MB still means cutting the aggregation pipeline, and with
