@@ -18,10 +18,9 @@ The classic execution engine runs every query either could; what is lost with SB
 `$search`, change-stream post-image lookup, the join optimizer and sampling-based cardinality
 estimation, none of which an in-process single-node engine can use.
 
-All sizes are bytes from `stat -c%s`, on `x86_64-linux`, gcc 16.2.1, GNU ld 2.46, lld 22.1.8,
-glibc 2.43. The intermediate steps below were measured on gcc 16.1.1, before a system upgrade
-moved the toolchain mid-round; 16.2.1 produces a library about 160 KB smaller, so the rows do
-not chain to the byte.
+All sizes are bytes from `stat -c%s` on `x86_64-linux`. The intermediate steps below were
+measured with an older GCC, which produces a library about 160 KB larger, so the rows do not
+chain to the byte.
 
 ## Where the size went
 
@@ -34,7 +33,7 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | `-Wl,-z,pack-relative-relocs` (DT_RELR) | 96,509,736 | −5.1 MB |
 | `--//bazel/config:opt=size` (`-Os` instead of `-O2`) | 61,956,680 | −34.6 MB |
 | `ssl=False`, `build_otel=False`, `build_enterprise=False` | 54,050,888 | −7.9 MB |
-| — rebuilt here on gcc 16.1.1 — | 54,216,296 | |
+| — rebuilt on the older GCC — | 54,216,296 | |
 | `--version-script`, exporting only the five entry points | 52,496,088 | −1.72 MB |
 | GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
 | ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
@@ -69,9 +68,9 @@ internalize almost the entire program — the two compound.
 **The previous round's conclusion that LTO is impractical here was wrong**, for two reasons
 that are easy to mistake for each other.
 
-*It is not expensive.* The whole-program phase peaks at **7 GB** and the link takes **3
-minutes**. What OOM-killed the 31 GB machine was `-ffat-lto-objects`, which emits both IR and
-machine code into all 5,909 objects. Without it there is no memory problem to manage.
+*It is not expensive.* The whole-program phase peaks at **7 GB** of resident memory. What
+exhausted 31 GB of it was `-ffat-lto-objects`, which emits both IR and machine code into all
+5,909 objects. Without it there is no memory problem to manage.
 
 *lld cannot link GCC LTO objects.* GCC puts its IR in `.gnu.lto_*` sections and expects the
 linker to call `liblto_plugin.so`; lld does not implement that plugin interface. It does not
@@ -184,8 +183,8 @@ Worth recording so nobody re-runs them.
 
 ## Technique: price a cut without rebuilding
 
-Bazel writes the full link command to a params file. Editing it and relinking takes about one
-second against 40 minutes for a rebuild, and under LTO about three minutes.
+Bazel writes the full link command to a params file. Editing it and relinking takes about a
+second, against a full rebuild for every candidate.
 
 ```sh
 E=~/.cache/bazel/_bazel_$USER/<hash>/execroot/_main
@@ -411,5 +410,5 @@ Test a library built outside cargo with
 `EMBEDDED_MONGODB_NATIVE_LIB_DIR=<dir> cargo test --release --all-targets`, where `<dir>`
 contains `libembedded_mongodb_native.so`.
 
-A full rebuild is about 45 minutes at `--local_resources=cpu=18` on 20 cores. Changing only
-link flags or `alwayslink` reuses every compile action and takes about five minutes.
+A full rebuild compiles 5,909 objects; set `--local_resources=cpu=<n>` to what the machine has.
+Changing only link flags or `alwayslink` reuses every compile action and is much quicker.
