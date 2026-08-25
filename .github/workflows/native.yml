@@ -110,6 +110,27 @@ jobs:
             mongo/python3-venv
           key: bazel-bootstrap-${{ matrix.target }}-${{ hashFiles('mongo/.bazelversion', 'mongo/.bazeliskrc', 'mongo/MODULE.bazel.lock', 'mongo/uv.lock') }}
 
+      - name: Install the LLVM toolchain the Apple build needs
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          # MongoDB's Apple toolchain resolves its compiler through Homebrew: it runs
+          # `brew --prefix llvm@$LLVM_VERSION` and the same for lld, and fails during
+          # analysis -- before compiling anything -- when either is missing. Xcode's own
+          # clang does not satisfy it, and neither is preinstalled on the runner images.
+          #
+          # The version is read from the same rcfile the toolchain reads, so this cannot
+          # drift from what Bazel will ask for on a submodule bump.
+          version=$(sed -n 's/^common:macos --repo_env=LLVM_VERSION=\([0-9][0-9]*\).*/\1/p' \
+                    mongo/.bazelrc | head -1)
+          test -n "$version" || { echo 'no LLVM_VERSION in mongo/.bazelrc' >&2; exit 1; }
+          echo "mongo/.bazelrc asks for LLVM $version"
+          brew install "llvm@$version" "lld@$version"
+          # Assert the paths the toolchain will look for, so a Homebrew layout change fails
+          # here with a clear message rather than inside a Bazel repository fetch.
+          brew --prefix "llvm@$version"
+          brew --prefix "lld@$version"
+
       - name: Install MongoDB's Bazel
         run: |
           set -euo pipefail
