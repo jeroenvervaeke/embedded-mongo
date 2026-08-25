@@ -162,9 +162,12 @@ jobs:
         timeout-minutes: 320
         env:
           EMBEDDED_MONGODB_BUILD_FROM_SOURCE: '1'
-          # build_native.rs defaults to 8, which oversubscribes every runner here. macos-15
-          # is the smallest at 3 vCPU.
-          EMBEDDED_MONGODB_BAZEL_JOBS: ${{ runner.os == 'macOS' && '3' || '4' }}
+          # build_native.rs defaults to 8, which oversubscribes every runner here. The Intel
+          # macOS runner gets 2 rather than 3: it is the only target that has run out of
+          # memory during plain compilation, and unlike the arm64 one it has never finished.
+          # That is insurance -- the evidenced fix for its crash is the profiler flag in
+          # build_native.rs -- but an hour per failed attempt is worth one fewer job.
+          EMBEDDED_MONGODB_BAZEL_JOBS: ${{ matrix.runner == 'macos-15-intel' && '2' || (runner.os == 'macOS' && '3' || '4') }}
         run: |
           set -euo pipefail
           if [ "${{ runner.os }}" = Linux ]; then
