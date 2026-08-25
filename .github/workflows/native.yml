@@ -198,11 +198,18 @@ jobs:
           #
           # -vv so the build script's output streams instead of being buffered until it
           # exits. Bazel's progress is the only signal this step produces for hours, and
-          # without it a killed runner leaves a silent log.
-          cargo build --release -vv -p embedded-mongodb-sys --message-format=json \
-            | tee build.jsonl \
-            | jq -r 'select(.reason=="compiler-message") | .message.rendered // empty'
-          out_dir=$(jq -r 'select(.reason=="build-script-executed")
+          # without it a killed runner leaves a silent log. That progress is on stderr, so it
+          # reaches the log regardless of what stdout does here.
+          #
+          # stdout goes straight to a file rather than through a pipe. -vv also echoes the
+          # build script's emitted lines onto stdout, interleaved with the JSON: piping that
+          # into jq killed jq on the first one two minutes in, and pipefail then failed the
+          # step 2h40m later when cargo finally exited -- after a build that had succeeded.
+          cargo build --release -vv -p embedded-mongodb-sys --message-format=json > build.jsonl
+
+          # fromjson? skips those interleaved lines instead of dying on them.
+          out_dir=$(jq -Rr 'fromjson?
+                           | select(.reason=="build-script-executed")
                            | select(.package_id | test("embedded-mongodb-sys"))
                            | .out_dir' build.jsonl | tail -1)
           test -n "$out_dir" || { echo 'could not locate the sys crate OUT_DIR' >&2; exit 1; }
