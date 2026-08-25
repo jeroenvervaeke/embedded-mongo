@@ -221,12 +221,33 @@ jobs:
           cp -L "$out_dir/libembedded_mongodb_native.so" stage/libembedded_mongodb_native.so
           chmod 0644 stage/libembedded_mongodb_native.so
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
-          # Resolve the real Bazel path now, while OUT_DIR still points at it. The smoke test
-          # below re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage, which
-          # repoints that symlink at stage/ -- so anything resolving OUT_DIR after it lands
-          # outside the output tree and can never find the link params file.
-          echo "native_lib=$(readlink -f "$out_dir/libembedded_mongodb_native.so")" \
-            >> "$GITHUB_OUTPUT"
+
+          # Take a copy of the link params file now, rather than resolving paths to it later.
+          # Two consecutive runs failed at the last step for the same underlying reason --
+          # the params file was not where a later step looked -- because the smoke test
+          # re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage and repoints
+          # the symlink in OUT_DIR at stage/. Copying it here, while the output tree is still
+          # intact, removes the whole class: nothing downstream resolves a Bazel path at all.
+          real=$(readlink -f "$out_dir/libembedded_mongodb_native.so")
+          execroot=${real%%/bazel-out/*}
+          echo "library:  $real"
+          echo "execroot: $execroot"
+          params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
+                   | head -1 || true)
+          [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
+                   -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
+                   | head -1 || true)
+          if [ -z "$params" ]; then
+            echo "no link params file found for $real" >&2
+            echo "--- beside the library ---" >&2
+            ls -la "$(dirname "$real")" >&2 || true
+            echo "--- params files anywhere in the output tree ---" >&2
+            find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
+            exit 1
+          fi
+          echo "params:   $params ($(wc -l < "$params") lines)"
+          cp "$params" stage/link.params
+          echo "execroot=$execroot" >> "$GITHUB_OUTPUT"
 
       - name: Restore the macOS install name
         if: runner.os == 'macOS'
@@ -305,40 +326,13 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           set -euo pipefail
-          # Bazel writes the link command to a params file beside the library, listing every
-          # object that went in. Reaching it through the OUT_DIR symlink keeps this honest:
-          # it is the configuration that was actually built, so it cannot drift from the
-          # flags in build_native.rs the way a second bazel query with its own flags could.
-          real="${{ steps.bazel.outputs.native_lib }}"
-          execroot=${real%%/bazel-out/*}
-          case $real in
-            */bazel-out/*) ;;
-            *) echo "recorded library path is not inside bazel-out: $real" >&2; exit 1 ;;
-          esac
-          echo "library:  $real"
-          echo "execroot: $execroot"
-
-          # Search the output tree rather than assuming the params file sits next to the
-          # library. It does locally, but not here, and the previous form hid that: `ls` on a
-          # glob that matches nothing exits 2, which pipefail turned into a bare 'exit code 2'
-          # with no message, before the guard below could say anything.
-          params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
-                   | head -1 || true)
-          [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
-                   -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
-                   | head -1 || true)
-          if [ -z "$params" ]; then
-            echo "no link params file under $execroot/bazel-out" >&2
-            echo "--- beside the library ---" >&2
-            ls -la "$(dirname "$real")" >&2 || true
-            echo "--- any params files in the output tree ---" >&2
-            find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
-            exit 1
-          fi
-          echo "params:   $params"
-
+          # stage/link.params was copied out during the build, so this reads a file that
+          # cannot have moved. It is the link command Bazel actually ran, which is why the
+          # component list cannot drift from the flags in build_native.rs.
+          test -s stage/link.params || { echo 'stage/link.params is missing or empty' >&2; exit 1; }
           ./scripts/collect-third-party-notices \
-            "$params" "$execroot" mongo dist/THIRD-PARTY-NOTICES
+            stage/link.params "${{ steps.bazel.outputs.execroot }}" mongo \
+            dist/THIRD-PARTY-NOTICES
 
       - uses: actions/upload-artifact@v4
         with:
@@ -403,7 +397,13 @@ jobs:
               exit 1
             fi
           else
-            gh release create "$TAG" dist/* --prerelease --title "native $TAG" \
+            # Not dist/*: the .sha256 and .glibc files are inputs to the manifest generator,
+            # not things to publish. A digest sitting beside the binary it describes is worth
+            # nothing -- whoever could replace one could replace both -- and shipping it
+            # invites someone to trust it instead of the copy committed in prebuilt.rs.
+            gh release create "$TAG" \
+              dist/libembedded_mongodb_native-*.so dist/LICENSE dist/NOTICE \
+              dist/THIRD-PARTY-NOTICES --prerelease --title "native $TAG" \
               --notes "Prebuilt embedded MongoDB engine. NOTICE names the upstream commit, the applied patches and the licensing terms."
           fi
 
