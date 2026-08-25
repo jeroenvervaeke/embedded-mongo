@@ -75,10 +75,19 @@ jobs:
             # 143, which is what an out-of-memory kill looks like from inside a job: the
             # whole-program LTO phase runs after every object is compiled, and its peak lands
             # near this runner's 16 GB. Swap is free here and absorbs the spike.
-            sudo fallocate -l 24G /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile > /dev/null
-            sudo swapon /swapfile
+            # A second swapfile, not /swapfile: the image already ships one and has it
+            # active, so writing to that path fails with 'fallocate failed: Text file busy'.
+            if ! swapon --show=NAME --noheadings | grep -qx /swapfile-ci; then
+              sudo fallocate -l 24G /swapfile-ci \
+                || sudo dd if=/dev/zero of=/swapfile-ci bs=1M count=24576 status=none
+              sudo chmod 600 /swapfile-ci
+              sudo mkswap /swapfile-ci > /dev/null
+              sudo swapon /swapfile-ci
+            fi
+            # Fail here rather than three hours later: without the extra swap this build is
+            # expected to be killed during the whole-program LTO phase.
+            total=$(free -g | awk '/^Swap:/ {print $2}')
+            test "$total" -ge 20 || { echo "only ${total}G swap available" >&2; exit 1; }
           fi
           # macOS has the least room and no second volume, and an ENOSPC there surfaces as an
           # opaque Bazel crash that never mentions disk.
