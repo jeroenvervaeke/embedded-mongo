@@ -262,9 +262,12 @@ jobs:
           ! grep -qE '^(GLIBCXX|CXXABI|GCC)_' <<<"$needs" \
             || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
           # Fail on anything unrecognised rather than quietly ignoring it.
-          unknown=$(grep -vE '^GLIBC_(2\.[0-9]+|ABI_DT_RELR)$' <<<"$needs" || true)
+          # Three-component versions are real: GLIBC_2.2.5, GLIBC_2.3.2, GLIBC_2.3.4 all
+          # appear on x86_64. aarch64 has none of them, its ABI baseline being 2.17, which
+          # is why only the x86_64 leg failed this check.
+          unknown=$(grep -vE '^GLIBC_(2\.[0-9]+(\.[0-9]+)?|ABI_DT_RELR)$' <<<"$needs" || true)
           test -z "$unknown" || { echo "unrecognised version needs: $unknown" >&2; exit 1; }
-          max=$(grep -oE '^GLIBC_2\.[0-9]+$' <<<"$needs" | sort -uV | tail -1)
+          max=$(grep -oE '^GLIBC_2\.[0-9]+(\.[0-9]+)?$' <<<"$needs" | sort -uV | tail -1)
           test "$(printf '%s\nGLIBC_2.39\n' "$max" | sort -uV | tail -1)" = 'GLIBC_2.39' \
             || { echo "glibc floor $max is above GLIBC_2.39" >&2; exit 1; }
           echo "glibc floor: $max"
