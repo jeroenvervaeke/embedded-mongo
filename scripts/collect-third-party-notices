@@ -33,12 +33,26 @@ done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Only packages that contribute object files. Include paths and headers appear in the params
+# Only packages that contribute compiled code. Include paths and headers appear in the params
 # too, and a component whose headers were read but whose code was not linked carries no
 # distribution obligation.
-grep -oE '[^ ]*\.o$' "$params" \
+#
+# All three suffixes matter, and getting this wrong fails open. A release link passes one
+# `.lo` archive per mongo library target and a `.pic.a` per external repository, while a debug
+# link passes individual `.pic.o` files -- so a pattern matching only `.o` finds a single
+# component in a release build and reports success. The output `.so` and the version script
+# are the only other path-like entries, and neither is a dependency.
+grep -oE '[^ ]*\.(o|lo|a)$' "$params" \
     | grep -oE '(src/third_party/[^/]+|external/[a-zA-Z0-9_.+~-]+)' \
     | sed 's|~$||' | sort -u > "$work/linked"
+
+# A link this size always pulls in third-party code. One component means the pattern above
+# stopped matching, not that the library became self-contained.
+if [ "$(wc -l < "$work/linked")" -lt 5 ]; then
+    echo "only $(wc -l < "$work/linked") third-party package(s) found in $params;" >&2
+    echo "the object-path pattern no longer matches this link's format" >&2
+    exit 1
+fi
 
 if [ ! -s "$work/linked" ]; then
     echo "no object files found in $params; is it a link params file?" >&2
