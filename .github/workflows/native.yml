@@ -4,8 +4,13 @@ name: native
 # them as a GitHub release keyed on the source commit, and commits the regenerated manifest
 # back. This is the only place the engine is compiled; ci.yml consumes what this produces.
 #
-# `prebuilt.rs` is deliberately absent from the path filter, so the commit-back cannot
-# retrigger this workflow.
+# Dispatch only, deliberately. A build takes hours against a hard six-hour job cap, and
+# publishing conveys the work in object form under the SSPL -- neither belongs on a push
+# trigger. Leaving `publish` off gives a build-and-validate run across all four targets, which
+# is what to use for a dry run or to measure wall-clock before committing to a release.
+#
+# Nothing here fires automatically, so a change to the engine reaches ci.yml as a freshness
+# failure naming this workflow rather than as a surprise multi-hour run.
 
 on:
   workflow_dispatch:
@@ -14,14 +19,6 @@ on:
         description: Publish a release and commit the manifest
         type: boolean
         default: false
-  push:
-    branches: [master]
-    paths:
-      - mongo
-      - patches/**
-      - embedded-mongodb-sys/native/**
-      - embedded-mongodb-sys/build_native.rs
-      - .github/workflows/native.yml
 
 permissions:
   contents: write
@@ -253,9 +250,9 @@ jobs:
 
   publish:
     needs: build
-    # A dispatch defaults to build-and-check only. Publishing is conveying the work in object
-    # form, so it takes an explicit choice.
-    if: github.event_name == 'push' || inputs.publish
+    # Off by default. Publishing conveys the work in object form under the SSPL, so it takes
+    # an explicit choice rather than following from having built successfully.
+    if: inputs.publish
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
