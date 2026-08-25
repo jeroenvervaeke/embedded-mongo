@@ -70,6 +70,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/embedded-mongodb
+          key: native-lib-x86_64-unknown-linux-gnu-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
       - run: cargo fmt --all --check
       # The build script has to resolve a library before clippy can check anything that
       # depends on it, and this job exists to check the Rust, not to exercise the download.
@@ -102,7 +106,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel, cache: ~/Library/Caches/embedded-mongodb }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -111,6 +119,10 @@ jobs:
         with:
           python-version: '3.13'
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
       - name: Build the wheel
         run: |
           set -euo pipefail
