@@ -1,0 +1,62 @@
+# How each third-party component linked into libembedded_mongodb_native.so is accounted for
+# in the notices published beside it. scripts/collect-third-party-notices reads the Bazel link
+# command and fails on any component that is not listed here, so adding a dependency cannot
+# quietly ship without its licence.
+#
+# The package names are exactly what appears in the link: a Bazel package under the MongoDB
+# checkout, or an `external/<repo>` for one Bazel fetched.
+#
+# Disposition:
+#   upstream <heading>   Covered by a numbered section in mongo/distsrc/THIRD-PARTY-NOTICES.
+#                        <heading> is the text after "License notice for", checked to exist.
+#   append   <path>      Not in that file. Its licence text lives at <path>, relative to the
+#                        MongoDB checkout or the Bazel execroot, and is appended verbatim.
+#   absent   <reason>    Must NOT be in the link. Present means a build flag regressed.
+#   review   <reason>    Linked, with no licence text available in the checkout. Publishing
+#                        is blocked until a human resolves it.
+#   ours     <path>      Not third-party: this project's own code, under LICENSE and NOTICE.
+#
+# package	disposition	detail
+
+src/third_party/asio	upstream	ASIO
+src/third_party/boost	upstream	Boost
+src/third_party/croaring	upstream	CRoaring
+src/third_party/fmt	upstream	fmt
+src/third_party/icu4c-57.1	upstream	ICU4C
+src/third_party/IntelRDFPMathLib20U1	upstream	Intel DFP Math Library
+src/third_party/libbson	upstream	libbson
+src/third_party/libmongocrypt	upstream	libmongocrypt
+src/third_party/libstemmer_c	upstream	Snowball
+src/third_party/murmurhash3	upstream	MurmurHash
+src/third_party/pcre2	upstream	PCRE2
+src/third_party/s2	upstream	S2 Geometry Library
+src/third_party/snappy	upstream	Snappy
+src/third_party/timelib	upstream	timelib
+src/third_party/unwind	upstream	libunwind
+src/third_party/wiredtiger	upstream	3rd party software included in the WiredTiger library
+src/third_party/yaml-cpp	upstream	yaml-cpp
+src/third_party/zstandard	upstream	Zstandard
+external/abseil-cpp	upstream	abseil-cpp
+external/re2	upstream	re2
+external/zlib	upstream	zlib
+
+# Linked, and MongoDB's notices do not cover them: their inventory marks both as not
+# distributed in release binaries, because MongoDB links them only in their own tooling.
+src/third_party/siphash	append	src/third_party/siphash/LICENSE_MIT
+src/third_party/tomcrypt-1.18.2	append	src/third_party/tomcrypt-1.18.2/LICENSE
+
+# Dropped by --//bazel/config:dev_stacktrace=False in embedded-mongodb-sys/build_native.rs.
+# libdwarf is the reason: it is LGPL-2.1, and a stripped, LTO'd, version-scripted static
+# library gives a recipient no way to relink against a modified copy. cpptrace is MIT and
+# would only have needed its notice, but it is the only thing that pulls libdwarf in.
+src/third_party/cpptrace	absent	dev_stacktrace is off; see build_native.rs
+src/third_party/libdwarf	absent	reached only through cpptrace
+
+# Reaches the link through the authorization and replication mocks in
+# embedded-mongodb-sys/native/BUILD.bazel, which the embedded server installs deliberately.
+# MongoDB's checkout ships no licence text for it -- their overlay replaces the upstream
+# repository root -- so there is nothing to append and nothing upstream covers it.
+external/googletest	review	no licence text in the checkout; decide before publishing
+
+# This project's own code, covered by LICENSE and NOTICE.
+external/mongot_localdev	ours	embedded-mongodb-sys/native

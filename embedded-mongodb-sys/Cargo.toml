@@ -14,3 +14,4 @@ tracing = "0.1"
 
 [build-dependencies]
 cxx-build = "1"
+sha2 = "0.10"

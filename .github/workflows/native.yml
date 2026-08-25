@@ -1,0 +1,363 @@
+name: native
+
+# Builds the MongoDB engine for every published target, proves each library loads, publishes
+# them as a GitHub release keyed on the source commit, and commits the regenerated manifest
+# back. This is the only place the engine is compiled; ci.yml consumes what this produces.
+#
+# Dispatch only, deliberately. A build takes hours against a hard six-hour job cap, and
+# publishing conveys the work in object form under the SSPL -- neither belongs on a push
+# trigger. Leaving `publish` off gives a build-and-validate run across all four targets, which
+# is what to use for a dry run or to measure wall-clock before committing to a release.
+#
+# Nothing here fires automatically, so a change to the engine reaches ci.yml as a freshness
+# failure naming this workflow rather than as a surprise multi-hour run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a release and commit the manifest
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Anchored on docs/native-size-reduction.md: the patched Linux library is
+          # 33,139,904 bytes and the same build without the patches is 44,885,600, so a
+          # single wide band would pass the exact artifact it exists to reject. Static
+          # libstdc++ adds roughly 2.4 MB on top.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            min_size: 30000000
+            max_size: 40000000
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            min_size: 30000000
+            max_size: 42000000
+          # macOS gets neither LTO nor the version script -- native/BUILD.bazel gates both on
+          # @platforms//os:linux -- so it cannot share a band. Start wide, record the real
+          # figure on the first green run, then tighten. The ceiling's real job here is
+          # catching a ~1.4 GB debug build.
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            min_size: 25000000
+            max_size: 90000000
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            min_size: 25000000
+            max_size: 90000000
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Make room for the build
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = Linux ]; then
+            # The runner's root filesystem is far too small for this: a full output base is
+            # about 17 GB. /mnt is the large scratch volume. Symlinking rather than passing
+            # --output_user_root keeps the flag list in build_native.rs the only one.
+            sudo mkdir -p /mnt/bazel
+            sudo chown "$USER" /mnt/bazel
+            mkdir -p "$HOME/.cache"
+            ln -s /mnt/bazel "$HOME/.cache/bazel"
+            # Never remove $AGENT_TOOLSDIRECTORY; setup-python reads it.
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/.ghcup \
+                        /usr/local/share/powershell /usr/share/swift /opt/ghc || true
+          fi
+          # Probe on both platforms. macOS has the least room and no second volume, and an
+          # ENOSPC there surfaces as an opaque Bazel crash that never mentions disk.
+          df -h
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check out the MongoDB submodule
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 mongo
+          test "$(git -C mongo rev-parse HEAD)" = "$(git rev-parse HEAD:mongo)" \
+            || { echo 'submodule checkout does not match the committed gitlink' >&2; exit 1; }
+
+      - name: Restore the Bazel bootstrap caches
+        uses: actions/cache@v4
+        with:
+          # Small and written once per submodule bump; the patches provably touch neither
+          # .bazelversion nor MODULE.bazel.lock, so patch iteration cannot invalidate it.
+          # Both bazelisk paths: it uses Library/Caches on macOS, and a Linux-only path there
+          # silently re-downloads the pinned Bazel fork every run. python3-venv and uv are
+          # here because mongo's bazelisk wrapper hook runs `uv sync` from PyPI on every cold
+          # invocation, which is a network bootstrap on the critical path of a long job.
+          path: |
+            ~/.cache/bazelisk
+            ~/Library/Caches/bazelisk
+            ~/.cache/uv
+            mongo/python3-venv
+          key: bazel-bootstrap-${{ matrix.target }}-${{ hashFiles('mongo/.bazelversion', 'mongo/.bazeliskrc', 'mongo/MODULE.bazel.lock', 'mongo/uv.lock') }}
+
+      - name: Install MongoDB's Bazel
+        run: |
+          set -euo pipefail
+          # .bazelversion pins a MongoDB fork that the preinstalled Bazelisk cannot resolve,
+          # so this download is a hard dependency of every cold build.
+          python3 mongo/buildscripts/install_bazel.py
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Apply the MongoDB patches
+        run: ./scripts/apply-mongo-patches
+
+      - name: Build the native library
+        id: bazel
+        # The platform cap is 360. Stopping short of it leaves the assertions and the smoke
+        # test room to run and say something, instead of a bare cancellation.
+        timeout-minutes: 320
+        env:
+          EMBEDDED_MONGODB_BUILD_FROM_SOURCE: '1'
+          # build_native.rs defaults to 8, which oversubscribes every runner here. macos-15
+          # is the smallest at 3 vCPU.
+          EMBEDDED_MONGODB_BAZEL_JOBS: ${{ runner.os == 'macOS' && '3' || '4' }}
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = Linux ]; then
+            # The image ships 12, 13 and 14; unsuffixed gcc is 13, below mongo's 14.2 floor,
+            # while manylinux_2_39 tolerates at most 14. Exactly one usable version.
+            export CC=gcc-14 CXX=g++-14
+          else
+            export CC=clang CXX=clang++
+          fi
+
+          mkdir -p stage dist
+          # Take the library from the OUT_DIR cargo reports, never from mongo/bazel-bin: that
+          # is a mutable symlink into the output base and can point at an artifact from an
+          # entirely different configuration.
+          cargo build --release -p embedded-mongodb-sys --message-format=json \
+            | tee build.jsonl \
+            | jq -r 'select(.reason=="compiler-message") | .message.rendered // empty'
+          out_dir=$(jq -r 'select(.reason=="build-script-executed")
+                           | select(.package_id | test("embedded-mongodb-sys"))
+                           | .out_dir' build.jsonl | tail -1)
+          test -n "$out_dir" || { echo 'could not locate the sys crate OUT_DIR' >&2; exit 1; }
+
+          # -L: on Linux the entry in OUT_DIR is a symlink into the output base.
+          cp -L "$out_dir/libembedded_mongodb_native.so" stage/libembedded_mongodb_native.so
+          chmod 0644 stage/libembedded_mongodb_native.so
+          echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the macOS install name
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          lib=stage/libembedded_mongodb_native.so
+          # build.rs rewrote LC_ID_DYLIB in OUT_DIR to that job's absolute path, which is
+          # meaningless anywhere else. Put it back to what the artifact must ship with; the
+          # library is linked with -headerpad_max_install_names so this always fits.
+          install_name_tool -id @rpath/libembedded_mongodb_native.so "$lib"
+          codesign --force --sign - "$lib"
+          otool -D "$lib"
+          otool -D "$lib" | grep -qx '@rpath/libembedded_mongodb_native.so'
+          codesign -v --verbose=4 "$lib"
+          lipo -archs "$lib"
+          file "$lib"
+
+      - name: Assert the library size
+        run: |
+          set -euo pipefail
+          size=$(wc -c < stage/libembedded_mongodb_native.so)
+          echo "${{ matrix.target }} is $size bytes"
+          test "$size" -ge ${{ matrix.min_size }} \
+            || { echo 'too small: a broken link produces a few KB and reports success' >&2; exit 1; }
+          test "$size" -le ${{ matrix.max_size }} \
+            || { echo 'too large: patches not applied, or a debug build' >&2; exit 1; }
+
+      - name: Check the glibc and C++ ABI floor
+        id: floor
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # maturin will not catch this. It keeps the requested manylinux tag when no policy
+          # satisfies the library, so a bad wheel installs cleanly and dies at import.
+          needs=$(readelf --wide -V stage/libembedded_mongodb_native.so \
+                  | grep -oE 'Name: [A-Z_]+_[A-Za-z0-9_.]+' | sed 's/^Name: //' | sort -u)
+          echo "$needs"
+          # -static-libstdc++ -static-libgcc should have removed these entirely.
+          ! grep -qE '^(GLIBCXX|CXXABI|GCC)_' <<<"$needs" \
+            || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
+          # Fail on anything unrecognised rather than quietly ignoring it.
+          unknown=$(grep -vE '^GLIBC_(2\.[0-9]+|ABI_DT_RELR)$' <<<"$needs" || true)
+          test -z "$unknown" || { echo "unrecognised version needs: $unknown" >&2; exit 1; }
+          max=$(grep -oE '^GLIBC_2\.[0-9]+$' <<<"$needs" | sort -uV | tail -1)
+          test "$(printf '%s\nGLIBC_2.39\n' "$max" | sort -uV | tail -1)" = 'GLIBC_2.39' \
+            || { echo "glibc floor $max is above GLIBC_2.39" >&2; exit 1; }
+          echo "glibc floor: $max"
+          echo "glibc_min=${max#GLIBC_}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test -- load the library and run the suite
+        env:
+          EMBEDDED_MONGODB_NATIVE_LIB_DIR: ${{ github.workspace }}/stage
+        run: |
+          # Nothing above opens the library. A size band and a symbol table do not prove the
+          # engine initialises, and a linked-but-dead blob is a real failure mode here.
+          cargo test --release --all-targets
+
+      - name: Stage the release assets
+        run: |
+          set -euo pipefail
+          cp stage/libembedded_mongodb_native.so \
+             "dist/libembedded_mongodb_native-${{ matrix.target }}.so"
+          ( cd dist && sha256sum "libembedded_mongodb_native-${{ matrix.target }}.so" ) \
+            > "dist/${{ matrix.target }}.sha256"
+          printf '%s' "${{ steps.floor.outputs.glibc_min }}" > "dist/${{ matrix.target }}.glibc"
+
+      - name: Assemble the third-party notices
+        # x86_64 Linux only: the notices ship once, and this is the widest link. cpptrace and
+        # libdwarf are `target_compatible_with @platforms//os:linux`, and macOS subtracts from
+        # the component set rather than adding to it -- it drops the version script and LTO
+        # but pulls in nothing extra. A macOS-only third-party dependency would slip past
+        # this; nothing in native/BUILD.bazel has one today.
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          # Bazel writes the link command to a params file beside the library, listing every
+          # object that went in. Reaching it through the OUT_DIR symlink keeps this honest:
+          # it is the configuration that was actually built, so it cannot drift from the
+          # flags in build_native.rs the way a second bazel query with its own flags could.
+          real=$(readlink -f "${{ steps.bazel.outputs.out_dir }}/libembedded_mongodb_native.so")
+          params=$(ls -t "$real"*.params 2>/dev/null | head -1)
+          test -n "$params" || { echo "no link params file beside $real" >&2; exit 1; }
+          ./scripts/collect-third-party-notices \
+            "$params" "${real%%/bazel-out/*}" mongo dist/THIRD-PARTY-NOTICES
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: dist/
+          retention-days: 7
+
+  publish:
+    needs: build
+    # Off by default. Publishing conveys the work in object form under the SSPL, so it takes
+    # an explicit choice rather than following from having built successfully.
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - id: tag
+        run: echo "tag=native-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          mv artifacts/libembedded_mongodb_native-*.so artifacts/*.sha256 \
+             artifacts/*.glibc artifacts/THIRD-PARTY-NOTICES dist/
+          # The licence, the modification notice and the directions to the corresponding
+          # source travel with the object code. Flat files rather than an archive, so the
+          # committed digest covers exactly the bytes that get mapped into a user's process.
+          cp LICENSE NOTICE dist/
+          ls -l dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          expected=$(cd dist && ls libembedded_mongodb_native-*.so | sort)
+          if gh release view "$TAG" --json assets -q '.assets[].name' > have.txt 2>/dev/null; then
+            if [ "$(grep '^libembedded_mongodb_native-.*\.so$' have.txt | sort)" = "$expected" ]; then
+              # A re-run after a lost push race. The build is not byte-reproducible, so reuse
+              # the bytes already published rather than uploading freshly built ones under a
+              # tag someone may already have downloaded.
+              echo "release $TAG is already complete; taking its assets"
+              rm -f dist/libembedded_mongodb_native-*.so
+              gh release download "$TAG" -D dist -p 'libembedded_mongodb_native-*.so' --clobber
+              ( cd dist && for library in libembedded_mongodb_native-*.so; do
+                  target=${library#libembedded_mongodb_native-}; target=${target%.so}
+                  sha256sum "$library" > "$target.sha256"
+                done )
+            else
+              echo "release $TAG exists with different assets; refusing to overwrite" >&2
+              exit 1
+            fi
+          else
+            gh release create "$TAG" dist/* --prerelease --title "native $TAG" \
+              --notes "Prebuilt embedded MongoDB engine. NOTICE names the upstream commit, the applied patches and the licensing terms."
+          fi
+
+      - name: Regenerate and commit the manifest
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ./scripts/write-prebuilt-manifest "$TAG" "$(git rev-parse HEAD)" dist
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add embedded-mongodb-sys/prebuilt.rs
+          git diff --cached --quiet && { echo 'manifest already current'; exit 0; }
+          git commit -m "build(sys): publish prebuilt native libraries for $TAG"
+          # Rebase before pushing. Hours pass between the checkout and this step, and a
+          # non-fast-forward here would strand an immutable release with no manifest.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "${{ github.ref_name }}" \
+               && git push origin "HEAD:${{ github.ref_name }}"; then
+              exit 0
+            fi
+            echo "push attempt $attempt failed; retrying"
+            sleep 10
+          done
+          exit 1
+
+  verify:
+    # A push made with GITHUB_TOKEN never triggers another workflow run, so ci.yml will not
+    # see the manifest commit. Check it here, or the least-reviewed commit in the repository
+    # ships unvalidated.
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # No submodule: proving the download path needs no engine source.
+      - run: cargo test --release --all-targets
+      - name: Build, install and import the wheel
+        run: |
+          set -euo pipefail
+          pip install 'maturin[patchelf]>=1.9,<2'
+          maturin build --release --out wheels
+          pip install wheels/*.whl
+          cd "$(mktemp -d)"
+          python -c "import pymongo_embedded; print(pymongo_embedded.__file__)"

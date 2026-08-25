@@ -377,12 +377,62 @@ worst failure mode a library embedded in someone else's application can have.
   `patches/0002` guards the two logging sites in `client_metadata.cpp` and the one in
   `hello_auth.cpp`. This is what a driver sends first, so it hit the PyMongo bindings directly.
 
+## Publishing a build
+
+The engine is no longer compiled on a developer's machine: `cargo build` downloads the
+library published for the target and verifies it against a SHA-256 committed in
+`embedded-mongodb-sys/prebuilt.rs`. Changing the submodule pin, `patches/`,
+`embedded-mongodb-sys/native/` or `build_native.rs` makes that manifest stale, and `build.rs`
+refuses to use a library that no longer matches the source beside it.
+
+So every change measured in this document now ends the same way:
+
+```sh
+gh workflow run native.yml --ref <branch> -f publish=true
+```
+
+That builds all four targets, asserts each library's size against a per-target band, checks
+the Linux ones carry no `GLIBCXX`, `CXXABI` or `GCC_` version needs and no glibc requirement
+above 2.39, runs the test suite against the fresh library, publishes a release, and commits
+the regenerated manifest. The band in `.github/workflows/native.yml` is what turns a size
+regression into a failed build rather than a surprise, so a change that legitimately moves
+the number has to move the band with it.
+
+The publish path also assembles THIRD-PARTY-NOTICES from the Bazel link command rather than
+copying MongoDB's, and fails when a linked component is unaccounted for. That gate is what
+found `cpptrace` (44 objects) and `libdwarf` (59) in the link with no notice covering them:
+MongoDB's inventory marks both as not distributed in release binaries, because they link them
+only in their own tooling. They are backtrace symbolization, which a library exposing five
+`extern "C"` entry points and no crash reporter cannot surface, so `build_native.rs` now
+passes `--//bazel/config:dev_stacktrace=False`. No patch was needed — upstream gates the
+dependency and every call site on that flag, and uses it themselves for `remote_unittest`.
+The size this returns is whatever the first published build reports.
+
+The same round removed `authmocks` from the link. It was the only path to
+`//src/mongo/unittest` and with it googletest, so a mocking framework was being compiled into
+the release library; the real `AuthorizationManagerFactoryImpl` replaces it and differs only
+in using the local authorization backend rather than a mock one. Dropping it needed one
+addition: `sasl_options_init` declares a dependency on the initializer node
+`CoreOptions_Store`, whose only provider in this link was an empty stub inside the mock, so
+`native/` now registers it — the same shape as the sharding registry stub above.
+
+Measured on `x86_64-linux` with all six patches applied, `dev_stacktrace=False`, static
+libstdc++ and the mocks removed: **33,557,992 bytes**, against 33,139,904 for the row above.
+The additions and removals very nearly cancel. (Measured with a newer GCC than the table,
+which is worth about 160 KB on its own, so this does not chain to the byte either.)
+
+Note that the published libraries link the C++ runtime statically
+(`-static-libstdc++ -static-libgcc`). Every figure in this document predates that, so a
+published library is larger than the table below by whatever `libstdc++.a` contributes.
+Otherwise the floor would be set by whichever compiler the CI image happens to ship, and GCC
+14 already emits the highest `GLIBCXX` version manylinux_2_39 permits.
+
 ## Reproducing
 
 ```sh
 git submodule update --init --depth 1
 ./scripts/apply-mongo-patches          # 2.57 MB, plus a crash fix
-cargo build --release
+EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo build --release
 ```
 
 `embedded-mongodb-sys/build.rs` passes the flags above. To drive bazel directly:

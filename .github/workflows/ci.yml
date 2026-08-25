@@ -1,0 +1,146 @@
+name: ci
+
+# Proves the prebuilt path end to end: the committed manifest still describes this tree, the
+# workspace builds and tests on every published target without Bazel, and the wheel builds,
+# installs and imports. No job here compiles the engine -- that is native.yml.
+
+on: [push, pull_request]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prebuilt-freshness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # SOURCE_COMMIT has to be reachable.
+
+      - name: The committed manifest must describe this tree
+        run: |
+          set -euo pipefail
+          manifest=embedded-mongodb-sys/prebuilt.rs
+          source_commit=$(sed -n 's/^const SOURCE_COMMIT: &str = "\(.*\)";$/\1/p' "$manifest")
+          tag=$(sed -n 's/^const RELEASE_TAG: &str = "\(.*\)";$/\1/p' "$manifest")
+          paths='patches embedded-mongodb-sys/native embedded-mongodb-sys/build_native.rs'
+
+          if ! git rev-parse --quiet --verify "$source_commit^{commit}" > /dev/null; then
+            echo "::error::$manifest names $source_commit, which is not a commit in this repository."
+            exit 1
+          fi
+
+          # A pathspec of `mongo` reports a submodule pin change as a diff on that path,
+          # which is why this needs no content hash over the engine.
+          drift=$(git rev-list --count "$source_commit..HEAD" -- $paths mongo)
+          # Not `mongo` here: applying the patches dirties the submodule's working tree, and
+          # the parent reports that as a modification to the path. A moved pin is a commit,
+          # so the rev-list above is what catches engine drift.
+          dirty=$(git status --porcelain -- $paths)
+          if [ "$drift" != 0 ] || [ -n "$dirty" ]; then
+            echo "::error::The native library inputs changed, but $manifest still points at $tag."
+            git log --oneline "$source_commit..HEAD" -- $paths mongo
+            printf '%s\n' "$dirty"
+            cat >&2 <<EOF
+
+          Publish a build for this tree:
+            gh workflow run native.yml --ref ${{ github.ref_name }} -f publish=true
+
+          Or build the engine locally:
+            EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo build --release
+          EOF
+            exit 1
+          fi
+          echo "manifest is current: $tag"
+
+      - name: NOTICE must name the pinned engine
+        run: |
+          set -euo pipefail
+          pin=$(git rev-parse HEAD:mongo)
+          grep -q "$pin" NOTICE \
+            || { echo "::error::NOTICE does not name the pinned mongo commit $pin"; exit 1; }
+
+  # Deliberately not gated on prebuilt-freshness. A stale manifest is the normal state right
+  # after a submodule bump, and gating would hide every formatting and lint failure behind it.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/embedded-mongodb
+          key: native-lib-x86_64-unknown-linux-gnu-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      - run: cargo fmt --all --check
+      # The build script has to resolve a library before clippy can check anything that
+      # depends on it, and this job exists to check the Rust, not to exercise the download.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, cache: ~/.cache/embedded-mongodb }
+          # build.rs resolves the cache under Library/Caches on macOS; caching ~/.cache there
+          # is a silent no-op that re-downloads the library on every job.
+          - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel, cache: ~/Library/Caches/embedded-mongodb }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5 # No submodule.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      - run: cargo test --release --all-targets
+      - run: cargo run --release --example basic
+
+  wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel, cache: ~/Library/Caches/embedded-mongodb }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      - name: Build the wheel
+        run: |
+          set -euo pipefail
+          # One wheel per platform, so there is no per-Python matrix and no cibuildwheel: its
+          # manylinux containers buy nothing here, because the prebuilt library's glibc floor
+          # is already fixed by the machine that built it.
+          pip install 'maturin[patchelf]>=1.9,<2'
+          maturin build --release --out wheels
+      - name: Install and import
+        run: |
+          set -euo pipefail
+          pip install wheels/*.whl
+          # Somewhere with no source tree, so a failed vendoring shows up here rather than
+          # resolving against the build directory.
+          cd "$(mktemp -d)"
+          python -c "import pymongo_embedded; print(pymongo_embedded.__file__)"
+          python "$GITHUB_WORKSPACE/examples/python/basic.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.runner }}
+          path: wheels/*.whl
