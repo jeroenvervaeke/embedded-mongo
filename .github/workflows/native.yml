@@ -304,10 +304,31 @@ jobs:
           # it is the configuration that was actually built, so it cannot drift from the
           # flags in build_native.rs the way a second bazel query with its own flags could.
           real=$(readlink -f "${{ steps.bazel.outputs.out_dir }}/libembedded_mongodb_native.so")
-          params=$(ls -t "$real"*.params 2>/dev/null | head -1)
-          test -n "$params" || { echo "no link params file beside $real" >&2; exit 1; }
+          execroot=${real%%/bazel-out/*}
+          echo "library:  $real"
+          echo "execroot: $execroot"
+
+          # Search the output tree rather than assuming the params file sits next to the
+          # library. It does locally, but not here, and the previous form hid that: `ls` on a
+          # glob that matches nothing exits 2, which pipefail turned into a bare 'exit code 2'
+          # with no message, before the guard below could say anything.
+          params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
+                   | head -1 || true)
+          [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
+                   -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
+                   | head -1 || true)
+          if [ -z "$params" ]; then
+            echo "no link params file under $execroot/bazel-out" >&2
+            echo "--- beside the library ---" >&2
+            ls -la "$(dirname "$real")" >&2 || true
+            echo "--- any params files in the output tree ---" >&2
+            find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
+            exit 1
+          fi
+          echo "params:   $params"
+
           ./scripts/collect-third-party-notices \
-            "$params" "${real%%/bazel-out/*}" mongo dist/THIRD-PARTY-NOTICES
+            "$params" "$execroot" mongo dist/THIRD-PARTY-NOTICES
 
       - uses: actions/upload-artifact@v4
         with:
