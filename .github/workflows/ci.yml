@@ -34,7 +34,10 @@ jobs:
           # A pathspec of `mongo` reports a submodule pin change as a diff on that path,
           # which is why this needs no content hash over the engine.
           drift=$(git rev-list --count "$source_commit..HEAD" -- $paths mongo)
-          dirty=$(git status --porcelain -- $paths mongo)
+          # Not `mongo` here: applying the patches dirties the submodule's working tree, and
+          # the parent reports that as a modification to the path. A moved pin is a commit,
+          # so the rev-list above is what catches engine drift.
+          dirty=$(git status --porcelain -- $paths)
           if [ "$drift" != 0 ] || [ -n "$dirty" ]; then
             echo "::error::The native library inputs changed, but $manifest still points at $tag."
             git log --oneline "$source_commit..HEAD" -- $paths mongo

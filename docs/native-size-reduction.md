@@ -408,6 +408,19 @@ passes `--//bazel/config:dev_stacktrace=False`. No patch was needed — upstream
 dependency and every call site on that flag, and uses it themselves for `remote_unittest`.
 The size this returns is whatever the first published build reports.
 
+The same round removed `authmocks` from the link. It was the only path to
+`//src/mongo/unittest` and with it googletest, so a mocking framework was being compiled into
+the release library; the real `AuthorizationManagerFactoryImpl` replaces it and differs only
+in using the local authorization backend rather than a mock one. Dropping it needed one
+addition: `sasl_options_init` declares a dependency on the initializer node
+`CoreOptions_Store`, whose only provider in this link was an empty stub inside the mock, so
+`native/` now registers it — the same shape as the sharding registry stub above.
+
+Measured on `x86_64-linux` with all six patches applied, `dev_stacktrace=False`, static
+libstdc++ and the mocks removed: **33,557,992 bytes**, against 33,139,904 for the row above.
+The additions and removals very nearly cancel. (Measured with a newer GCC than the table,
+which is worth about 160 KB on its own, so this does not chain to the byte either.)
+
 Note that the published libraries link the C++ runtime statically
 (`-static-libstdc++ -static-libgcc`). Every figure in this document predates that, so a
 published library is larger than the table below by whatever `libstdc++.a` contributes.

@@ -224,6 +224,12 @@ cd ..
 EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo test --all-targets --release
 ```
 
+`--release` is not optional once the patches are applied. Patches 0003, 0004 and 0006 leave
+dangling references to the code they remove, and only the release build's link-time
+optimization and `--gc-sections` eliminate them. A debug build links — nothing checks for
+undefined symbols there — and then fails to load with `undefined symbol:
+mongo::executor::makeNetworkInterface` or similar.
+
 `embedded-mongodb-sys/build_native.rs` holds the Bazel invocation and rebuilds incrementally
 when the native sources change. Cargo-run tests and examples find the library through the sys
 crate's build output; standalone binaries still need it in the platform loader path.

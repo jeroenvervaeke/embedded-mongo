@@ -9,6 +9,8 @@ cc_binary(
         # MongoDB still references SSLPeerInfo::forSession from client.h and the
         # authentication commands, so its definition has to come along.
         "@//src/mongo/util/net:ssl_peer_info.cpp",
+        # And the one symbol that file needs which ssl=False leaves undefined.
+        "ssl_x509_name_none.cpp",
         # Mongo's auto-header scanner cannot see injected-repository sources.
         "@//src/mongo/base/.auto_header:initializer_h",
         "@//src/mongo/bson/.auto_header:bson_validate_h",
@@ -19,7 +21,7 @@ cc_binary(
         "@//src/mongo/db/.auto_header:service_context_h",
         "@//src/mongo/db/.auto_header:service_entry_point_shard_role_h",
         "@//src/mongo/db/.auto_header:wire_version_h",
-        "@//src/mongo/db/auth/.auto_header:authorization_manager_factory_mock_h",
+        "@//src/mongo/db/auth/.auto_header:authorization_manager_factory_impl_h",
         "@//src/mongo/db/auth/.auto_header:authorization_manager_h",
         "@//src/mongo/db/index_builds/.auto_header:index_builds_coordinator_h",
         "@//src/mongo/db/index_builds/.auto_header:index_builds_coordinator_mongod_h",
@@ -81,7 +83,10 @@ cc_binary(
         "@//src/mongo/db:service_context_d",
         "@//src/mongo/db:wire_version",
         "@//src/mongo/db/auth",
-        "@//src/mongo/db/auth:authmocks",
+        # The real factory, not authmocks: that target pulls //src/mongo/unittest, and with it
+        # googletest, into a release library. It differs only in using the local authorization
+        # backend instead of a mock one, which is what an engine with real storage wants.
+        "@//src/mongo/db/auth:authserver",
         "@//src/mongo/db/commands:standalone",
         "@//src/mongo/db/index_builds:index_builds_coordinator_mongod",
         "@//src/mongo/db/op_observer",

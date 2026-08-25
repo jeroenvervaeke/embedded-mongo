@@ -3,7 +3,7 @@
 #include "mongo/base/initializer.h"
 #include "mongo/bson/bson_validate.h"
 #include "mongo/db/auth/authorization_manager.h"
-#include "mongo/db/auth/authorization_manager_factory_mock.h"
+#include "mongo/db/auth/authorization_manager_factory_impl.h"
 #include "mongo/db/client_strand.h"
 #include "mongo/db/commands.h"
 #include "mongo/db/dbdirectclient.h"
@@ -71,6 +71,14 @@
 // so nothing registers it and the initializer graph refuses to run with "depends on missing
 // node". Standing in for it is enough: there is no sharding state to initialize.
 MONGO_INITIALIZER_GENERAL(ShardingInitializationMongoDRegistry, (), ())
+(mongo::InitializerContext*) {}
+
+// mongod registers this node while storing its command-line options, in mongod_options_init.cpp,
+// which belongs to the server binary rather than to any library here. SASL option storage
+// declares a dependency on it, so the initializer graph needs the node to exist. The library
+// previously got it from an empty stub inside AuthorizationManagerFactoryMock; that mock is gone,
+// and there are no command-line options to store, so the stub belongs here instead.
+MONGO_INITIALIZER_GENERAL(CoreOptions_Store, (), ())
 (mongo::InitializerContext*) {}
 
 namespace {
@@ -333,7 +341,7 @@ private:
         wireSpec.isInternalClient = true;
         mongo::WireSpec::getWireSpec(_serviceContext).initialize(std::move(wireSpec));
 
-        auto authFactory = std::make_unique<mongo::AuthorizationManagerFactoryMock>();
+        auto authFactory = std::make_unique<mongo::AuthorizationManagerFactoryImpl>();
         mongo::AuthorizationManager::set(
             _serviceContext->getService(),
             authFactory->createShard(_serviceContext->getService()));

@@ -246,9 +246,15 @@ fn check_not_stale(workspace_root: &Path) {
         ));
     }
 
+    // Deliberately not `mongo`. Applying the patches leaves the submodule's working tree
+    // dirty, which the parent repository reports as a modification to that path -- so
+    // including it here would fail every build for anyone who has run
+    // scripts/apply-mongo-patches, which is a required step for a source build and produces
+    // exactly the engine the published library was built from. Engine drift that matters
+    // still shows up: the gitlink comparison above catches a moved pin, and the submodule's
+    // own HEAD is compared directly.
     let mut args = vec!["status", "--porcelain", "--"];
     args.extend_from_slice(ARTIFACT_PATHS);
-    args.push("mongo");
     if let Some(dirty) = git(&args)
         && !dirty.is_empty()
     {
