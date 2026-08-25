@@ -221,6 +221,12 @@ jobs:
           cp -L "$out_dir/libembedded_mongodb_native.so" stage/libembedded_mongodb_native.so
           chmod 0644 stage/libembedded_mongodb_native.so
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+          # Resolve the real Bazel path now, while OUT_DIR still points at it. The smoke test
+          # below re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage, which
+          # repoints that symlink at stage/ -- so anything resolving OUT_DIR after it lands
+          # outside the output tree and can never find the link params file.
+          echo "native_lib=$(readlink -f "$out_dir/libembedded_mongodb_native.so")" \
+            >> "$GITHUB_OUTPUT"
 
       - name: Restore the macOS install name
         if: runner.os == 'macOS'
@@ -303,8 +309,12 @@ jobs:
           # object that went in. Reaching it through the OUT_DIR symlink keeps this honest:
           # it is the configuration that was actually built, so it cannot drift from the
           # flags in build_native.rs the way a second bazel query with its own flags could.
-          real=$(readlink -f "${{ steps.bazel.outputs.out_dir }}/libembedded_mongodb_native.so")
+          real="${{ steps.bazel.outputs.native_lib }}"
           execroot=${real%%/bazel-out/*}
+          case $real in
+            */bazel-out/*) ;;
+            *) echo "recorded library path is not inside bazel-out: $real" >&2; exit 1 ;;
+          esac
           echo "library:  $real"
           echo "execroot: $execroot"
 
