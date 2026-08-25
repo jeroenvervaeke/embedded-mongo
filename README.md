@@ -163,6 +163,29 @@ the MongoDB ID, component, context, severity, and lossless JSON record; open, co
 operations add spans. Without a subscriber the library remains silent. The basic example installs
 `tracing-subscriber`.
 
+## Identifying the engine
+
+Nothing can attach a shell or Compass to an in-process engine, so the engine says what it is
+through three ordinary commands. Use any of them to assert in a test that you are running
+against the embedded engine rather than a real `mongod`:
+
+```rust
+let build_info = client.run_command("admin", &doc! { "buildInfo": 1 })?;
+// modules            = ["embedded"]
+// buildEnvironment   = { …, embedded: "true", embeddedAuthor: "Jeroen Vervaeke" }
+
+let status = client.run_command("admin", &doc! { "serverStatus": 1 })?;
+// status.embedded    = { embedded: true, author, repository, mongoVersion }
+
+let about = client.run_command("admin", &doc! { "embeddedMongodb": 1 })?;
+// the same payload, as a command of its own
+```
+
+`modules` is the cheapest check; a real `mongod` never reports an `embedded` module.
+
+`gitVersion` is deliberately left alone — it reports the MongoDB commit the engine was built
+from, and the pinned commit is recorded in [`NOTICE`](NOTICE).
+
 ## Benchmark
 
 Criterion measures open, `insert_one`, `find_one`, and close separately:

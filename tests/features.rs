@@ -40,6 +40,7 @@ const SECTIONS: &[Section] = &[
     ("bson_types", bson_types),
     ("collection_administration", collection_administration),
     ("error_paths", error_paths),
+    ("embedded_identity", embedded_identity),
 ];
 
 #[test]
@@ -915,4 +916,81 @@ fn error_paths(client: &Client) {
     })
     .unwrap();
     assert_eq!(rows.find(doc! {}).unwrap().try_collect().unwrap().len(), 1);
+}
+
+/// The three surfaces that identify this engine as the embedded build.
+///
+/// Nothing can attach a shell or Compass to an in-process engine, so this is how a caller
+/// finds out what it is talking to. All three are registered from
+/// `embedded-mongodb-sys/native/embedded_mongodb_native.cpp`, so they survive a submodule
+/// bump; if one disappears, a build change took it away.
+fn embedded_identity(client: &Client) {
+    let build_info = client
+        .run_command("admin", &doc! { "buildInfo": 1 })
+        .expect("buildInfo failed");
+    let modules: Vec<&str> = build_info
+        .get_array("modules")
+        .expect("buildInfo has no modules")
+        .iter()
+        .filter_map(Bson::as_str)
+        .collect();
+    assert!(
+        modules.contains(&"embedded"),
+        "buildInfo does not report the embedded module: {modules:?}"
+    );
+    // The extra fields land in buildEnvironment: that is where `inBuildInfo` entries go.
+    let environment = build_info
+        .get_document("buildEnvironment")
+        .expect("buildInfo has no buildEnvironment");
+    assert_eq!(
+        environment.get_str("embedded").ok(),
+        Some("true"),
+        "buildEnvironment is missing the embedded field"
+    );
+    assert!(
+        !environment
+            .get_str("embeddedAuthor")
+            .unwrap_or_default()
+            .is_empty(),
+        "buildEnvironment names no author"
+    );
+    // The engine's own provenance must survive being decorated.
+    assert!(
+        build_info.get_str("gitVersion").is_ok(),
+        "buildInfo lost gitVersion"
+    );
+    assert!(
+        build_info.get_str("version").is_ok(),
+        "buildInfo lost version"
+    );
+
+    let status = client
+        .run_command("admin", &doc! { "serverStatus": 1 })
+        .expect("serverStatus failed");
+    let embedded = status
+        .get_document("embedded")
+        .expect("serverStatus has no embedded section");
+    assert_eq!(embedded.get_bool("embedded").ok(), Some(true));
+    assert!(
+        !embedded.get_str("author").unwrap_or_default().is_empty(),
+        "embedded section names no author"
+    );
+
+    let about = client
+        .run_command("admin", &doc! { "embeddedMongodb": 1 })
+        .expect("embeddedMongodb command failed");
+    assert_eq!(about.get_bool("embedded").ok(), Some(true));
+    assert!(
+        about
+            .get_str("repository")
+            .unwrap_or_default()
+            .starts_with("https://"),
+        "embeddedMongodb reports no repository"
+    );
+    // Same payload from the command and the serverStatus section.
+    assert_eq!(
+        about.get_str("author").ok(),
+        embedded.get_str("author").ok(),
+        "command and serverStatus disagree about the author"
+    );
 }

@@ -16,6 +16,7 @@ cc_binary(
         "@//src/mongo/bson/.auto_header:bson_validate_h",
         "@//src/mongo/db/.auto_header:client_strand_h",
         "@//src/mongo/db/.auto_header:commands_h",
+        "@//src/mongo/db/commands/server_status/.auto_header:server_status_h",
         "@//src/mongo/db/.auto_header:dbdirectclient_h",
         "@//src/mongo/db/.auto_header:server_options_h",
         "@//src/mongo/db/.auto_header:service_context_h",
@@ -57,6 +58,7 @@ cc_binary(
         "@//src/mongo/scripting/.auto_header:dbdirectclient_factory_h",
         "@//src/mongo/util/.auto_header:assert_util_h",
         "@//src/mongo/util/.auto_header:periodic_runner_factory_h",
+        "@//src/mongo/util/.auto_header:version_h",
         "@//src/mongo/util/version/.auto_header:releases_h",
     ],
     copts = [
@@ -88,6 +90,7 @@ cc_binary(
         # backend instead of a mock one, which is what an engine with real storage wants.
         "@//src/mongo/db/auth:authserver",
         "@//src/mongo/db/commands:standalone",
+        "@//src/mongo/db/commands/server_status:server_status_core",
         "@//src/mongo/db/index_builds:index_builds_coordinator_mongod",
         "@//src/mongo/db/op_observer",
         "@//src/mongo/db/pipeline/process_interface:mongod_process_interface_factory",
