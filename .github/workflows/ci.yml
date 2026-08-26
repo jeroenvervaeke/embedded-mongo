@@ -129,15 +129,21 @@ jobs:
           # is already fixed by the machine that built it.
           pip install 'maturin[patchelf]>=1.9,<2'
           maturin build --release --out wheels
-      - name: Install and import
+      - name: Check the engine was vendored into the wheel
         run: |
           set -euo pipefail
-          pip install wheels/*.whl
-          # Somewhere with no source tree, so a failed vendoring shows up here rather than
-          # resolving against the build directory.
-          cd "$(mktemp -d)"
-          python -c "import pymongo_embedded; print(pymongo_embedded.__file__)"
-          python "$GITHUB_WORKSPACE/examples/python/basic.py"
+          # Not `pip install`: this package is not distributed on PyPI and is not installed
+          # from it. It needs PyMongo 4.18, which exists only as a mongo-python-driver
+          # checkout -- ./scripts/python is the supported way to run it. Installing the wheel
+          # here would resolve some other PyMongo from PyPI and fail on a difference that
+          # says nothing about this repository.
+          #
+          # What is worth checking is that the engine ended up inside the wheel, which is the
+          # part the prebuilt pipeline is responsible for. auditwheel vendors into .libs on
+          # Linux, delocate into .dylibs on macOS, so the pattern has to cover both.
+          wheel=$(ls wheels/*.whl)
+          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
+            || { echo "the wheel does not carry the engine:" >&2; python -m zipfile -l "$wheel" >&2; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.runner }}
