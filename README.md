@@ -144,6 +144,8 @@ The embedded deployment model creates a path toward:
 - **Concurrency and errors** — `Client: Send + Sync`, concurrent inserts, and structured
   duplicate-key errors.
 - **Observability** — MongoDB-to-`tracing` severity mapping.
+- **Engine identity** — `buildInfo`, the `serverStatus` section and the `embeddedMongodb`
+  command all report the embedded build and agree with one another.
 
 One end-to-end integration test covers the operations demonstrated by all three examples.
 
@@ -269,9 +271,16 @@ Changing anything the published library was built from — the submodule pin, `p
 matches the source beside it. Publish a new one with `gh workflow run native.yml --ref
 <branch> -f publish=true`, which builds every target and commits the regenerated manifest.
 
-- **Release:** 33 MB, plus the statically linked C++ runtime. The exact figure for each
-  target is whatever the `native` workflow prints and records in the manifest.
-- **Debug:** about 1.4 GB.
+Sizes of the published libraries, as recorded in the manifest:
+
+| target | bytes |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | 34,525,944 |
+| `aarch64-unknown-linux-gnu` | 37,387,448 |
+| `aarch64-apple-darwin` | 72,745,856 |
+
+macOS is roughly twice the size because `native/BUILD.bazel` gates link-time optimization and
+the version script on `@platforms//os:linux`, so it gets neither.
 
 The release build is size-optimized rather than speed-optimized: `-Os`, link-time optimization,
 per-function and per-data sections with `--gc-sections`, packed relative relocations, only the
@@ -298,7 +307,9 @@ is linked statically, which costs a couple of megabytes and keeps a published li
   Rust host.
 - Authentication, replication, transactions, change streams, TTL, backup, encryption, and the
   wider command set are outside the current supported scope.
-- Linux and macOS are tested; Windows is untested.
+- Prebuilt libraries cover x86_64 and aarch64 Linux and aarch64 macOS. Intel macOS builds
+  from source: that runner could not finish inside GitHub's six-hour job limit, and the
+  image retires in August 2027. Windows is untested; see issue #9.
 - This project embeds MongoDB Community Server as a modified work first published on 2026-07-27
   and licensed as a whole under SSPL-1.0. Distribution or service use requires a license review;
   see [`LICENSE`](LICENSE).
