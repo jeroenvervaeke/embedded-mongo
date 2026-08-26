@@ -8,10 +8,32 @@
 // and commits the result back.
 
 /// Release holding the assets below.
-const RELEASE_TAG: &str = "native-unpublished";
+const RELEASE_TAG: &str = "native-b29a1556ae4f";
 /// Repository commit CI built them from. `build.rs` compares this checkout's native inputs
 /// against it and refuses to use a library that no longer matches.
-const SOURCE_COMMIT: &str = "0000000000000000000000000000000000000000";
+const SOURCE_COMMIT: &str = "b29a1556ae4fd019f19e6a4609927d6de36ec3da";
 const BASE_URL: &str = "https://github.com/jeroenvervaeke/embedded-mongo/releases/download";
 
-static PREBUILT: &[Prebuilt] = &[];
+static PREBUILT: &[Prebuilt] = &[
+    Prebuilt {
+        target: "aarch64-apple-darwin",
+        asset: "libembedded_mongodb_native-aarch64-apple-darwin.so",
+        sha256: "b4c6074859b29fb7e3673133447308b67b0fe467a2c87521896fe32f9988451a",
+        size: 72745856,
+        glibc_min: None,
+    },
+    Prebuilt {
+        target: "aarch64-unknown-linux-gnu",
+        asset: "libembedded_mongodb_native-aarch64-unknown-linux-gnu.so",
+        sha256: "044a8fe902fbe4da732b682ad37eed117b9fd31c8d647480bb776adad397a24a",
+        size: 37387448,
+        glibc_min: Some((2, 38)),
+    },
+    Prebuilt {
+        target: "x86_64-unknown-linux-gnu",
+        asset: "libembedded_mongodb_native-x86_64-unknown-linux-gnu.so",
+        sha256: "08b4e5b31789da95bc7ea412085e5011cb1b491642d2e198314cc8d870933e51",
+        size: 34525944,
+        glibc_min: Some((2, 38)),
+    },
+];
