@@ -254,32 +254,39 @@ jobs:
           chmod 0644 stage/libembedded_mongodb_native.so
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
-          # Take a copy of the link params file now, rather than resolving paths to it later.
-          # Two consecutive runs failed at the last step for the same underlying reason --
-          # the params file was not where a later step looked -- because the smoke test
-          # re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage and repoints
-          # the symlink in OUT_DIR at stage/. Copying it here, while the output tree is still
-          # intact, removes the whole class: nothing downstream resolves a Bazel path at all.
-          real=$(readlink -f "$out_dir/libembedded_mongodb_native.so")
-          execroot=${real%%/bazel-out/*}
-          echo "library:  $real"
-          echo "execroot: $execroot"
-          params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
-                   | head -1 || true)
-          [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
-                   -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
-                   | head -1 || true)
-          if [ -z "$params" ]; then
-            echo "no link params file found for $real" >&2
-            echo "--- beside the library ---" >&2
-            ls -la "$(dirname "$real")" >&2 || true
-            echo "--- params files anywhere in the output tree ---" >&2
-            find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
-            exit 1
+          # Only Linux, and only because the notices step needs it. On macOS build.rs copies
+          # the library into OUT_DIR instead of symlinking -- it has to, in order to rewrite
+          # LC_ID_DYLIB and re-sign it -- so resolving that path lands in the target
+          # directory, not the Bazel output tree, and there is no params file to find. The
+          # notices are assembled on x86_64 Linux only, so nothing here is lost.
+          if [ "${{ runner.os }}" = Linux ]; then
+            # Take a copy of the link params file now, rather than resolving paths to it later.
+            # Two consecutive runs failed at the last step for the same underlying reason --
+            # the params file was not where a later step looked -- because the smoke test
+            # re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage and repoints
+            # the symlink in OUT_DIR at stage/. Copying it here, while the output tree is still
+            # intact, removes the whole class: nothing downstream resolves a Bazel path at all.
+            real=$(readlink -f "$out_dir/libembedded_mongodb_native.so")
+            execroot=${real%%/bazel-out/*}
+            echo "library:  $real"
+            echo "execroot: $execroot"
+            params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
+                     | head -1 || true)
+            [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
+                     -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
+                     | head -1 || true)
+            if [ -z "$params" ]; then
+              echo "no link params file found for $real" >&2
+              echo "--- beside the library ---" >&2
+              ls -la "$(dirname "$real")" >&2 || true
+              echo "--- params files anywhere in the output tree ---" >&2
+              find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
+              exit 1
+            fi
+            echo "params:   $params ($(wc -l < "$params") lines)"
+            cp "$params" stage/link.params
+            echo "execroot=$execroot" >> "$GITHUB_OUTPUT"
           fi
-          echo "params:   $params ($(wc -l < "$params") lines)"
-          cp "$params" stage/link.params
-          echo "execroot=$execroot" >> "$GITHUB_OUTPUT"
 
       - name: Restore the macOS install name
         if: runner.os == 'macOS'
