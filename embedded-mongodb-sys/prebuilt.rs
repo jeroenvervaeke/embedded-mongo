@@ -8,10 +8,10 @@
 // and commits the result back.
 
 /// Release holding the assets below.
-const RELEASE_TAG: &str = "native-b29a1556ae4f";
+const RELEASE_TAG: &str = "native-130b1b88983c";
 /// Repository commit CI built them from. `build.rs` compares this checkout's native inputs
 /// against it and refuses to use a library that no longer matches.
-const SOURCE_COMMIT: &str = "b29a1556ae4fd019f19e6a4609927d6de36ec3da";
+const SOURCE_COMMIT: &str = "130b1b88983c62761dbcc1d9a99fe8a4bc6e4878";
 const BASE_URL: &str = "https://github.com/jeroenvervaeke/embedded-mongo/releases/download";
 
 static PREBUILT: &[Prebuilt] = &[
