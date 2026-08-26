@@ -115,7 +115,7 @@ python -m pip install target/wheels/pymongo_embedded-*.whl
 The first build downloads the published engine; see [Build and test](#build-and-test) for the
 alternatives.
 
-The initial binding supports synchronous PyMongo 4.18 commands, including normal CRUD, cursors,
+The initial binding supports synchronous PyMongo 4.17 commands, including normal CRUD, cursors,
 aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,
 transactions, change streams, exhaust cursors, and async PyMongo are not supported.
 
