@@ -142,7 +142,13 @@ what to use for a dry run.
    `THIRD-PARTY-NOTICES` assembled from the actual link, then regenerates
    `embedded-mongodb-sys/prebuilt.rs` and commits it as `github-actions[bot]`.
 3. **verify** — re-tests the published artifacts on every target *through* the committed
-   manifest, and builds, installs and imports the wheel.
+   manifest, and builds the Python wheel to confirm the engine is vendored into it.
+
+The wheel is built but never installed. `pymongo-embedded` is not published to PyPI and needs
+PyMongo 4.18, which exists only as a `mongo-python-driver` checkout, so `pip install` would
+resolve some unrelated release and fail on a difference that says nothing about this
+repository. `./scripts/python` is how the binding is actually run; CI only checks the part
+this pipeline owns, which is that a wheel built against the published library contains it.
 
 `prebuilt.rs` is `@generated`. Never edit it by hand; the generator recomputes every digest
 from the library itself rather than trusting the sidecar that came with it.
