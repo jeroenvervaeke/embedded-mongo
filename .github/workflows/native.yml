@@ -526,8 +526,9 @@ jobs:
           # Built, not installed: the package is not on PyPI and needs a PyMongo that only
           # exists as a driver checkout. What this proves is that a wheel built against the
           # published library vendors that library, which is this pipeline's business.
+          # auditwheel vendors into .libs on Linux, delocate into .dylibs on macOS.
           pip install 'maturin[patchelf]>=1.9,<2'
           maturin build --release --out wheels
           wheel=$(ls wheels/*.whl)
-          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.libs/.*libembedded_mongodb_native' \
+          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
             || { echo "the wheel does not carry the engine:" >&2; python -m zipfile -l "$wheel" >&2; exit 1; }

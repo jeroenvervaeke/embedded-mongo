@@ -139,9 +139,10 @@ jobs:
           # says nothing about this repository.
           #
           # What is worth checking is that the engine ended up inside the wheel, which is the
-          # part the prebuilt pipeline is responsible for.
+          # part the prebuilt pipeline is responsible for. auditwheel vendors into .libs on
+          # Linux, delocate into .dylibs on macOS, so the pattern has to cover both.
           wheel=$(ls wheels/*.whl)
-          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.libs/.*libembedded_mongodb_native' \
+          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
             || { echo "the wheel does not carry the engine:" >&2; python -m zipfile -l "$wheel" >&2; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
