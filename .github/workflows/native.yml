@@ -404,7 +404,19 @@ jobs:
           merge-multiple: true
 
       - id: tag
-        run: echo "tag=native-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          # Key the tag on the engine's content rather than on HEAD. git ls-tree emits a tree
+          # hash for each directory and the gitlink for the submodule, so identical engine
+          # inputs give an identical key no matter how many unrelated commits have landed
+          # since. Publishing twice from the same engine then finds the existing release and
+          # reuses it, instead of minting a second tag holding byte-identical libraries --
+          # which is exactly what a HEAD-derived tag did.
+          key=$(git ls-tree HEAD -- patches embedded-mongodb-sys/native \
+                  embedded-mongodb-sys/build_native.rs mongo | sha256sum | cut -c1-12)
+          test -n "$key" || { echo 'could not compute an engine key' >&2; exit 1; }
+          echo "engine key: $key"
+          echo "tag=native-$key" >> "$GITHUB_OUTPUT"
 
       - name: Assemble the bundle
         run: |
@@ -460,7 +472,7 @@ jobs:
             # invites someone to trust it instead of the copy committed in prebuilt.rs.
             gh release create "$TAG" \
               dist/libembedded_mongodb_native-*.so dist/LICENSE dist/NOTICE \
-              dist/THIRD-PARTY-NOTICES --prerelease --title "native $TAG" \
+              dist/THIRD-PARTY-NOTICES --title "native $TAG" \
               --notes "Prebuilt embedded MongoDB engine. NOTICE names the upstream commit, the applied patches and the licensing terms."
           fi
 
