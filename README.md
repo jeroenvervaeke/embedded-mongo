@@ -1,5 +1,9 @@
 # Embedded MongoDB
 
+[![CI](https://github.com/jeroenvervaeke/embedded-mongo/actions/workflows/ci.yml/badge.svg)](https://github.com/jeroenvervaeke/embedded-mongo/actions/workflows/ci.yml)
+[![MongoDB Community 9.0.0-alpha0](https://img.shields.io/badge/MongoDB_Community-9.0.0--alpha0-47A248?logo=mongodb&logoColor=white)](https://github.com/mongodb/mongo/tree/e08eb5e22f1658f5074139e535efb9c68c15c41c)
+[![License: SSPL-1.0](https://img.shields.io/badge/license-SSPL--1.0-blue.svg)](LICENSE)
+
 **The MongoDB version of SQLite.**
 
 The real MongoDB engine, embedded directly in your application.
