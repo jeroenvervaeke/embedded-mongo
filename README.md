@@ -230,6 +230,12 @@ The published Linux libraries are built on Ubuntu 24.04 and therefore need **gli
 newer**; a source build has no such floor. Rather than failing at load time, `build.rs`
 compares the requirement against the host and stops the build with the remedy.
 
+Prebuilt libraries are published for `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`. Anything else — an Intel Mac, musl,
+a BSD — builds from source, which the next section covers. Intel macOS is absent because
+that runner could not finish a build inside GitHub's six-hour job limit, and GitHub retires
+the image in August 2027 regardless.
+
 ### Building the engine from source
 
 Needed only to change the engine itself. MongoDB's pinned build requires Python 3.13, Bazel,

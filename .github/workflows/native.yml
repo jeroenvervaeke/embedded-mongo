@@ -57,12 +57,14 @@ jobs:
           # @platforms//os:linux -- so it cannot share a band. Start wide, record the real
           # figure on the first green run, then tighten. The ceiling's real job here is
           # catching a ~1.4 GB debug build.
+          #
+          # No x86_64-apple-darwin. That runner never completed a build: at three Bazel jobs
+          # it crashed, and at two it reached 5,609 of 6,299 actions before hitting the
+          # six-hour job cap. GitHub retires the Intel image in August 2027 in any case, so
+          # Intel Mac users build from source. Re-adding it is one entry here plus a
+          # republish, and nothing in the design assumes a fixed target set.
           - target: aarch64-apple-darwin
             runner: macos-15
-            min_size: 25000000
-            max_size: 90000000
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
             min_size: 25000000
             max_size: 90000000
     runs-on: ${{ matrix.runner }}
@@ -194,12 +196,9 @@ jobs:
         timeout-minutes: 320
         env:
           EMBEDDED_MONGODB_BUILD_FROM_SOURCE: '1'
-          # build_native.rs defaults to 8, which oversubscribes every runner here. The Intel
-          # macOS runner gets 2 rather than 3: it is the only target that has run out of
-          # memory during plain compilation, and unlike the arm64 one it has never finished.
-          # That is insurance -- the evidenced fix for its crash is the profiler flag in
-          # build_native.rs -- but an hour per failed attempt is worth one fewer job.
-          EMBEDDED_MONGODB_BAZEL_JOBS: ${{ matrix.runner == 'macos-15-intel' && '2' || (runner.os == 'macOS' && '3' || '4') }}
+          # build_native.rs defaults to 8, which oversubscribes every runner here. macos-15
+          # is the smallest at 3 vCPU.
+          EMBEDDED_MONGODB_BAZEL_JOBS: ${{ runner.os == 'macOS' && '3' || '4' }}
         run: |
           set -euo pipefail
           if [ "${{ runner.os }}" = Linux ]; then
@@ -484,7 +483,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
