@@ -410,8 +410,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          mv artifacts/libembedded_mongodb_native-*.so artifacts/*.sha256 \
-             artifacts/*.glibc artifacts/THIRD-PARTY-NOTICES dist/
+          # Collect by name, wherever the artifacts put them. The upload carries dist/ and
+          # stage/ as directories, so the downloaded tree is nested rather than flat -- and a
+          # glob written against one layout breaks silently when the other appears. Note the
+          # dash in the pattern: it matches the per-target copies in dist/ and never
+          # stage/libembedded_mongodb_native.so.
+          find artifacts -type f \
+            \( -name 'libembedded_mongodb_native-*.so' -o -name '*.sha256' \
+               -o -name '*.glibc' -o -name 'THIRD-PARTY-NOTICES' \) \
+            -exec mv -t dist/ {} +
+          # Three targets, each contributing a library, a digest and a glibc floor, plus one
+          # notices file. Anything else means an artifact was missing or a name changed.
+          libraries=$(ls dist/libembedded_mongodb_native-*.so | wc -l)
+          test "$libraries" -eq 3 || { echo "expected 3 libraries, found $libraries" >&2; exit 1; }
+          test -s dist/THIRD-PARTY-NOTICES || { echo 'no THIRD-PARTY-NOTICES' >&2; exit 1; }
           # The licence, the modification notice and the directions to the corresponding
           # source travel with the object code. Flat files rather than an archive, so the
           # committed digest covers exactly the bytes that get mapped into a user's process.
