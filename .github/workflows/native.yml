@@ -19,6 +19,14 @@ on:
         description: Publish a release and commit the manifest
         type: boolean
         default: false
+      reuse_run:
+        description: >-
+          Run ID to take already-built libraries from, skipping the compile. For iterating on
+          the steps after the build, which take seconds and have repeatedly been what fails.
+          Never use it for the run that publishes: those artifacts must come from a build of
+          this exact tree.
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -49,12 +57,14 @@ jobs:
           # @platforms//os:linux -- so it cannot share a band. Start wide, record the real
           # figure on the first green run, then tighten. The ceiling's real job here is
           # catching a ~1.4 GB debug build.
+          #
+          # No x86_64-apple-darwin. That runner never completed a build: at three Bazel jobs
+          # it crashed, and at two it reached 5,609 of 6,299 actions before hitting the
+          # six-hour job cap. GitHub retires the Intel image in August 2027 in any case, so
+          # Intel Mac users build from source. Re-adding it is one entry here plus a
+          # republish, and nothing in the design assumes a fixed target set.
           - target: aarch64-apple-darwin
             runner: macos-15
-            min_size: 25000000
-            max_size: 90000000
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
             min_size: 25000000
             max_size: 90000000
     runs-on: ${{ matrix.runner }}
@@ -63,23 +73,37 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Make room for the build
+        if: inputs.reuse_run == ''
         run: |
           set -euo pipefail
           if [ "${{ runner.os }}" = Linux ]; then
-            # The runner's root filesystem is far too small for this: a full output base is
-            # about 17 GB. /mnt is the large scratch volume. Symlinking rather than passing
-            # --output_user_root keeps the flag list in build_native.rs the only one.
-            sudo mkdir -p /mnt/bazel
-            sudo chown "$USER" /mnt/bazel
-            mkdir -p "$HOME/.cache"
-            ln -s /mnt/bazel "$HOME/.cache/bazel"
-            # Never remove $AGENT_TOOLSDIRECTORY; setup-python reads it.
-            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/.ghcup \
-                        /usr/local/share/powershell /usr/share/swift /opt/ghc || true
+            # Disk is not the constraint it was assumed to be: the image has a 145 GB root
+            # with over 100 GB free and no separate /mnt volume, against an output base of
+            # about 17 GB. So nothing is deleted and nothing is relocated.
+            #
+            # Memory is the constraint. Both Linux legs of the first run were killed at
+            # roughly three hours with 'The runner has received a shutdown signal' and exit
+            # 143, which is what an out-of-memory kill looks like from inside a job: the
+            # whole-program LTO phase runs after every object is compiled, and its peak lands
+            # near this runner's 16 GB. Swap is free here and absorbs the spike.
+            # A second swapfile, not /swapfile: the image already ships one and has it
+            # active, so writing to that path fails with 'fallocate failed: Text file busy'.
+            if ! swapon --show=NAME --noheadings | grep -qx /swapfile-ci; then
+              sudo fallocate -l 24G /swapfile-ci \
+                || sudo dd if=/dev/zero of=/swapfile-ci bs=1M count=24576 status=none
+              sudo chmod 600 /swapfile-ci
+              sudo mkswap /swapfile-ci > /dev/null
+              sudo swapon /swapfile-ci
+            fi
+            # Fail here rather than three hours later: without the extra swap this build is
+            # expected to be killed during the whole-program LTO phase.
+            total=$(free -g | awk '/^Swap:/ {print $2}')
+            test "$total" -ge 20 || { echo "only ${total}G swap available" >&2; exit 1; }
           fi
-          # Probe on both platforms. macOS has the least room and no second volume, and an
-          # ENOSPC there surfaces as an opaque Bazel crash that never mentions disk.
+          # macOS has the least room and no second volume, and an ENOSPC there surfaces as an
+          # opaque Bazel crash that never mentions disk.
           df -h
+          if [ "${{ runner.os }}" = Linux ]; then free -h; fi
 
       - uses: actions/setup-python@v5
         with:
@@ -95,6 +119,7 @@ jobs:
             || { echo 'submodule checkout does not match the committed gitlink' >&2; exit 1; }
 
       - name: Restore the Bazel bootstrap caches
+        if: inputs.reuse_run == ''
         uses: actions/cache@v4
         with:
           # Small and written once per submodule bump; the patches provably touch neither
@@ -110,7 +135,29 @@ jobs:
             mongo/python3-venv
           key: bazel-bootstrap-${{ matrix.target }}-${{ hashFiles('mongo/.bazelversion', 'mongo/.bazeliskrc', 'mongo/MODULE.bazel.lock', 'mongo/uv.lock') }}
 
+      - name: Install the LLVM toolchain the Apple build needs
+        if: runner.os == 'macOS' && inputs.reuse_run == ''
+        run: |
+          set -euo pipefail
+          # MongoDB's Apple toolchain resolves its compiler through Homebrew: it runs
+          # `brew --prefix llvm@$LLVM_VERSION` and the same for lld, and fails during
+          # analysis -- before compiling anything -- when either is missing. Xcode's own
+          # clang does not satisfy it, and neither is preinstalled on the runner images.
+          #
+          # The version is read from the same rcfile the toolchain reads, so this cannot
+          # drift from what Bazel will ask for on a submodule bump.
+          version=$(sed -n 's/^common:macos --repo_env=LLVM_VERSION=\([0-9][0-9]*\).*/\1/p' \
+                    mongo/.bazelrc | head -1)
+          test -n "$version" || { echo 'no LLVM_VERSION in mongo/.bazelrc' >&2; exit 1; }
+          echo "mongo/.bazelrc asks for LLVM $version"
+          brew install "llvm@$version" "lld@$version"
+          # Assert the paths the toolchain will look for, so a Homebrew layout change fails
+          # here with a clear message rather than inside a Bazel repository fetch.
+          brew --prefix "llvm@$version"
+          brew --prefix "lld@$version"
+
       - name: Install MongoDB's Bazel
+        if: inputs.reuse_run == ''
         run: |
           set -euo pipefail
           # .bazelversion pins a MongoDB fork that the preinstalled Bazelisk cannot resolve,
@@ -119,10 +166,31 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Apply the MongoDB patches
+        if: inputs.reuse_run == ''
         run: ./scripts/apply-mongo-patches
+
+      - name: Reuse an earlier build
+        # Skips the compile and takes the library and the link params from a previous run, so
+        # the steps below -- which take seconds, and are what has repeatedly failed -- can be
+        # iterated in minutes instead of hours. The submodule is still checked out above,
+        # because the notices need the vendored licence texts.
+        if: inputs.reuse_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "${{ inputs.reuse_run }}" \
+            --repo "${{ github.repository }}" \
+            --name "native-${{ matrix.target }}" --dir .
+          test -s stage/libembedded_mongodb_native.so \
+            || { echo 'reused artifact has no library' >&2; ls -R . | head -40 >&2; exit 1; }
+          chmod 0644 stage/libembedded_mongodb_native.so
+          mkdir -p dist
+          echo "reused $(wc -c < stage/libembedded_mongodb_native.so) bytes from run ${{ inputs.reuse_run }}"
 
       - name: Build the native library
         id: bazel
+        if: inputs.reuse_run == ''
         # The platform cap is 360. Stopping short of it leaves the assertions and the smoke
         # test room to run and say something, instead of a bare cancellation.
         timeout-minutes: 320
@@ -142,13 +210,40 @@ jobs:
           fi
 
           mkdir -p stage dist
+
+          # A resource sample every two minutes. The first run produced no output at all
+          # between the build starting and the runner being killed three hours later, which
+          # left nothing to diagnose: cargo buffers a build script's output until it
+          # finishes, so Bazel's progress never reached the log. -vv below fixes the
+          # buffering; this fixes the other half, by recording what memory and disk were
+          # doing at the moment things stopped.
+          if [ "${{ runner.os }}" = Linux ]; then
+            ( while :; do
+                echo "[sample $(date -u +%H:%M:%S)] $(free -m | awk '/^Mem:/ {print "mem "$3"/"$2"MB"} /^Swap:/ {print "swap "$3"/"$2"MB"}' | tr '\n' ' ')disk $(df -m --output=avail / | tail -1)MB"
+                sleep 120
+              done ) &
+            sampler=$!
+            trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          fi
+
           # Take the library from the OUT_DIR cargo reports, never from mongo/bazel-bin: that
           # is a mutable symlink into the output base and can point at an artifact from an
           # entirely different configuration.
-          cargo build --release -p embedded-mongodb-sys --message-format=json \
-            | tee build.jsonl \
-            | jq -r 'select(.reason=="compiler-message") | .message.rendered // empty'
-          out_dir=$(jq -r 'select(.reason=="build-script-executed")
+          #
+          # -vv so the build script's output streams instead of being buffered until it
+          # exits. Bazel's progress is the only signal this step produces for hours, and
+          # without it a killed runner leaves a silent log. That progress is on stderr, so it
+          # reaches the log regardless of what stdout does here.
+          #
+          # stdout goes straight to a file rather than through a pipe. -vv also echoes the
+          # build script's emitted lines onto stdout, interleaved with the JSON: piping that
+          # into jq killed jq on the first one two minutes in, and pipefail then failed the
+          # step 2h40m later when cargo finally exited -- after a build that had succeeded.
+          cargo build --release -vv -p embedded-mongodb-sys --message-format=json > build.jsonl
+
+          # fromjson? skips those interleaved lines instead of dying on them.
+          out_dir=$(jq -Rr 'fromjson?
+                           | select(.reason=="build-script-executed")
                            | select(.package_id | test("embedded-mongodb-sys"))
                            | .out_dir' build.jsonl | tail -1)
           test -n "$out_dir" || { echo 'could not locate the sys crate OUT_DIR' >&2; exit 1; }
@@ -157,6 +252,40 @@ jobs:
           cp -L "$out_dir/libembedded_mongodb_native.so" stage/libembedded_mongodb_native.so
           chmod 0644 stage/libembedded_mongodb_native.so
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+
+          # Only Linux, and only because the notices step needs it. On macOS build.rs copies
+          # the library into OUT_DIR instead of symlinking -- it has to, in order to rewrite
+          # LC_ID_DYLIB and re-sign it -- so resolving that path lands in the target
+          # directory, not the Bazel output tree, and there is no params file to find. The
+          # notices are assembled on x86_64 Linux only, so nothing here is lost.
+          if [ "${{ runner.os }}" = Linux ]; then
+            # Take a copy of the link params file now, rather than resolving paths to it later.
+            # Two consecutive runs failed at the last step for the same underlying reason --
+            # the params file was not where a later step looked -- because the smoke test
+            # re-runs the build script with EMBEDDED_MONGODB_NATIVE_LIB_DIR=stage and repoints
+            # the symlink in OUT_DIR at stage/. Copying it here, while the output tree is still
+            # intact, removes the whole class: nothing downstream resolves a Bazel path at all.
+            real=$(readlink -f "$out_dir/libembedded_mongodb_native.so")
+            execroot=${real%%/bazel-out/*}
+            echo "library:  $real"
+            echo "execroot: $execroot"
+            params=$(find "$(dirname "$real")" -maxdepth 1 -name '*.params' -type f 2>/dev/null \
+                     | head -1 || true)
+            [ -n "$params" ] || params=$(find "$execroot/bazel-out" \
+                     -name 'libembedded_mongodb_native.so*.params' -type f 2>/dev/null \
+                     | head -1 || true)
+            if [ -z "$params" ]; then
+              echo "no link params file found for $real" >&2
+              echo "--- beside the library ---" >&2
+              ls -la "$(dirname "$real")" >&2 || true
+              echo "--- params files anywhere in the output tree ---" >&2
+              find "$execroot/bazel-out" -name '*.params' -type f 2>/dev/null | head -20 >&2 || true
+              exit 1
+            fi
+            echo "params:   $params ($(wc -l < "$params") lines)"
+            cp "$params" stage/link.params
+            echo "execroot=$execroot" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Restore the macOS install name
         if: runner.os == 'macOS'
@@ -198,9 +327,12 @@ jobs:
           ! grep -qE '^(GLIBCXX|CXXABI|GCC)_' <<<"$needs" \
             || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
           # Fail on anything unrecognised rather than quietly ignoring it.
-          unknown=$(grep -vE '^GLIBC_(2\.[0-9]+|ABI_DT_RELR)$' <<<"$needs" || true)
+          # Three-component versions are real: GLIBC_2.2.5, GLIBC_2.3.2, GLIBC_2.3.4 all
+          # appear on x86_64. aarch64 has none of them, its ABI baseline being 2.17, which
+          # is why only the x86_64 leg failed this check.
+          unknown=$(grep -vE '^GLIBC_(2\.[0-9]+(\.[0-9]+)?|ABI_DT_RELR)$' <<<"$needs" || true)
           test -z "$unknown" || { echo "unrecognised version needs: $unknown" >&2; exit 1; }
-          max=$(grep -oE '^GLIBC_2\.[0-9]+$' <<<"$needs" | sort -uV | tail -1)
+          max=$(grep -oE '^GLIBC_2\.[0-9]+(\.[0-9]+)?$' <<<"$needs" | sort -uV | tail -1)
           test "$(printf '%s\nGLIBC_2.39\n' "$max" | sort -uV | tail -1)" = 'GLIBC_2.39' \
             || { echo "glibc floor $max is above GLIBC_2.39" >&2; exit 1; }
           echo "glibc floor: $max"
@@ -232,20 +364,25 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           set -euo pipefail
-          # Bazel writes the link command to a params file beside the library, listing every
-          # object that went in. Reaching it through the OUT_DIR symlink keeps this honest:
-          # it is the configuration that was actually built, so it cannot drift from the
-          # flags in build_native.rs the way a second bazel query with its own flags could.
-          real=$(readlink -f "${{ steps.bazel.outputs.out_dir }}/libembedded_mongodb_native.so")
-          params=$(ls -t "$real"*.params 2>/dev/null | head -1)
-          test -n "$params" || { echo "no link params file beside $real" >&2; exit 1; }
+          # stage/link.params was copied out during the build, so this reads a file that
+          # cannot have moved. It is the link command Bazel actually ran, which is why the
+          # component list cannot drift from the flags in build_native.rs.
+          test -s stage/link.params || { echo 'stage/link.params is missing or empty' >&2; exit 1; }
           ./scripts/collect-third-party-notices \
-            "$params" "${real%%/bazel-out/*}" mongo dist/THIRD-PARTY-NOTICES
+            stage/link.params "${{ steps.bazel.outputs.execroot || '.' }}" mongo \
+            dist/THIRD-PARTY-NOTICES
 
       - uses: actions/upload-artifact@v4
+        # always(): a failure in one of the steps above is exactly when these are wanted, so
+        # the next attempt can reuse this build instead of spending three hours repeating it.
+        if: always()
         with:
           name: native-${{ matrix.target }}
-          path: dist/
+          path: |
+            dist/
+            stage/libembedded_mongodb_native.so
+            stage/link.params
+          if-no-files-found: warn
           retention-days: 7
 
   publish:
@@ -305,7 +442,13 @@ jobs:
               exit 1
             fi
           else
-            gh release create "$TAG" dist/* --prerelease --title "native $TAG" \
+            # Not dist/*: the .sha256 and .glibc files are inputs to the manifest generator,
+            # not things to publish. A digest sitting beside the binary it describes is worth
+            # nothing -- whoever could replace one could replace both -- and shipping it
+            # invites someone to trust it instead of the copy committed in prebuilt.rs.
+            gh release create "$TAG" \
+              dist/libembedded_mongodb_native-*.so dist/LICENSE dist/NOTICE \
+              dist/THIRD-PARTY-NOTICES --prerelease --title "native $TAG" \
               --notes "Prebuilt embedded MongoDB engine. NOTICE names the upstream commit, the applied patches and the licensing terms."
           fi
 
@@ -340,7 +483,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:

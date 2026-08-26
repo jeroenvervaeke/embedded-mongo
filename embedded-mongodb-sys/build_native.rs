@@ -142,6 +142,17 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         // reliably be allocated that late, so the shared library must use the system allocator.
         .arg("--//bazel/config:allocator=system")
         .arg("--disable_warnings_as_errors=True")
+        // mongo/.bazelrc turns on --experimental_collect_system_network_usage, whose
+        // collector thread calls sysctl through JNI on every sample. On a memory-tight macOS
+        // runner that native call fails and takes the whole Bazel server with it:
+        //
+        //   FATAL: bazel ran out of memory and crashed
+        //   java.lang.OutOfMemoryError: sysctl (Cannot allocate memory)
+        //       at SystemNetworkStats.getNetIoCountersNative(Native Method)
+        //
+        // It collects profiling data nobody reads here, so switch it off everywhere rather
+        // than only on the platform that has been seen to die from it.
+        .arg("--noexperimental_collect_system_network_usage")
         .arg("--copt=-include")
         .arg("--copt=sys/syscall.h")
         .arg("--copt=-fPIC");
