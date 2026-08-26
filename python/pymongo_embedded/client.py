@@ -12,11 +12,8 @@ if TYPE_CHECKING:
 
 _SCHEMES = ("mongodb+embedded://", "mongodb_embedded://")
 
-# 4.17 is the newest PyMongo that exists. The binding was written against a source
-# checkout of mongo-python-driver, whose in-development version reports 4.18, and pinning
-# to that made the package uninstallable: pip cannot resolve a release that was never cut.
-if pymongo.version_tuple[:2] != (4, 17):
-    raise ImportError("pymongo-embedded 0.1 requires PyMongo 4.17.x")
+if pymongo.version_tuple[:2] != (4, 18):
+    raise ImportError("pymongo-embedded 0.1 requires PyMongo 4.18.x")
 
 
 def _path(uri: object) -> str | None:

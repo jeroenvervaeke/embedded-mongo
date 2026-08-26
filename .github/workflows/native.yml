@@ -520,11 +520,14 @@ jobs:
           python-version: '3.13'
       # No submodule: proving the download path needs no engine source.
       - run: cargo test --release --all-targets
-      - name: Build, install and import the wheel
+      - name: Build the wheel and check the engine is inside it
         run: |
           set -euo pipefail
+          # Built, not installed: the package is not on PyPI and needs a PyMongo that only
+          # exists as a driver checkout. What this proves is that a wheel built against the
+          # published library vendors that library, which is this pipeline's business.
           pip install 'maturin[patchelf]>=1.9,<2'
           maturin build --release --out wheels
-          pip install wheels/*.whl
-          cd "$(mktemp -d)"
-          python -c "import pymongo_embedded; print(pymongo_embedded.__file__)"
+          wheel=$(ls wheels/*.whl)
+          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.libs/.*libembedded_mongodb_native' \
+            || { echo "the wheel does not carry the engine:" >&2; python -m zipfile -l "$wheel" >&2; exit 1; }
