@@ -566,8 +566,25 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
+      # The manifest commit is pushed as a GitHub App rather than with GITHUB_TOKEN. A push
+      # made with GITHUB_TOKEN never triggers a workflow run, which left the least-reviewed
+      # commit in the repository -- one CI has never seen -- sitting on master until the next
+      # ordinary push. An app's push is an ordinary push.
+      #
+      # Needs an app installed on this repository with contents: write, and two settings on
+      # it: the APP_ID variable and the APP_PRIVATE_KEY secret. Without them this step fails
+      # immediately, before the release is created.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v5
         with:
+          # Not just for the clone: the push at the end of this job reuses the credential
+          # checkout stores, so this is what decides who the commit comes from.
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v4
@@ -652,12 +669,19 @@ jobs:
 
       - name: Regenerate and commit the manifest
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           ./scripts/write-prebuilt-manifest "$TAG" "$(git rev-parse HEAD)" dist
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # GitHub derives a bot account from the app, and the noreply address has to carry
+          # that account's numeric id or the commit shows as an unrecognised author. Asked
+          # for rather than hardcoded, so renaming or replacing the app needs no edit here.
+          slug='${{ steps.app-token.outputs.app-slug }}[bot]'
+          user_id=$(gh api "/users/$slug" --jq .id)
+          test -n "$user_id" || { echo "no account for $slug" >&2; exit 1; }
+          git config user.name "$slug"
+          git config user.email "$user_id+$slug@users.noreply.github.com"
           git add embedded-mongodb-sys/prebuilt.rs
           git diff --cached --quiet && { echo 'manifest already current'; exit 0; }
           git commit -m "build(sys): publish prebuilt native libraries for $TAG"
@@ -674,9 +698,11 @@ jobs:
           exit 1
 
   verify:
-    # A push made with GITHUB_TOKEN never triggers another workflow run, so ci.yml will not
-    # see the manifest commit. Check it here, or the least-reviewed commit in the repository
-    # ships unvalidated.
+    # Re-tests the published artifacts through the committed manifest. The manifest commit now
+    # triggers ci.yml on its own -- an app's push is an ordinary push -- so this overlaps with
+    # what runs there. It is kept because it is tied to this release: it starts the moment the
+    # assets are published, on the ref that published them, and fails this run rather than a
+    # separate one that nobody is watching.
     needs: publish
     strategy:
       fail-fast: false
