@@ -83,7 +83,10 @@ jobs:
       - run: cargo fmt --all --check
       # The build script has to resolve a library before clippy can check anything that
       # depends on it, and this job exists to check the Rust, not to exercise the download.
-      - run: cargo clippy --all-targets -- -D warnings
+      # --workspace is load-bearing: the root Cargo.toml is both a package and the workspace
+      # root, so without it cargo checks only the root package and every member crate --
+      # the bindings included -- is skipped in silence.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     strategy:
@@ -114,10 +117,16 @@ jobs:
         uses: ./.github/actions/android-ndk
         with:
           target: ${{ matrix.target }}
+      # embedded-mongodb-python is excluded from the Android targets alone: pyo3 needs an
+      # interpreter for the target it links against, and there is no Android CPython here.
       - if: matrix.cross
-        run: cargo test --release --all-targets --no-run --target ${{ matrix.target }}
+        run: cargo test --release --all-targets --no-run --workspace --exclude embedded-mongodb-python --target ${{ matrix.target }}
       - if: '!matrix.cross'
-        run: cargo test --release --all-targets
+        run: cargo test --release --all-targets --workspace
+      # cargo test builds no cdylib, not even under --all-targets, so the JNI library that
+      # actually ships is never linked by the step above.
+      - if: '!matrix.cross'
+        run: cargo build --release --workspace
       - if: '!matrix.cross'
         run: cargo run --release --example basic
 
@@ -168,3 +177,7 @@ jobs:
         with:
           name: wheel-${{ matrix.runner }}
           path: wheels/*.whl
+
+  # The Android library is a Gradle build, so nothing above compiles a line of it: `test` cross
+  # compiles the JNI crate, but the AAR, the ABIs it packages and the Kotlin wrapping the bridge
+  # are built and tested only here.
