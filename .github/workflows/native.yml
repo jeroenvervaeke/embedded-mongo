@@ -448,18 +448,44 @@ jobs:
           # The image the emulator runs, not the one the library targets: an API 24 binary
           # runs on any later Android, and the older system images are slower to boot and no
           # longer carry an x86_64 variant for every tag.
+          # avdmanager and the emulator disagree about where AVDs live when only
+          # ANDROID_SDK_HOME is set -- one writes $ANDROID_SDK_HOME/.android/avd, the other
+          # reads $ANDROID_SDK_HOME/avd -- and the emulator then reports the AVD as simply
+          # unknown. Both honour ANDROID_AVD_HOME ahead of everything else, so naming it
+          # settles the question.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+
           image="system-images;android-35;default;x86_64"
-          # Both of these read a few lines and exit, which hands the writer a SIGPIPE that
+          # yes reads nothing back and gets a SIGPIPE when sdkmanager stops asking, which
           # pipefail would turn into a failed step.
           ( set +o pipefail; yes | sdkmanager --licenses > /dev/null )
-          sdkmanager --install "$image" platform-tools emulator > /dev/null
+          sdkmanager --install "$image" platform-tools emulator
           ( set +o pipefail; echo no | avdmanager create avd -n ci -k "$image" --force )
+          # avdmanager reports success whether or not an AVD landed where the emulator will
+          # look for it.
+          avdmanager list avd | grep -qE '^ *Name: ci$' \
+            || { echo 'the AVD was not created' >&2; avdmanager list avd >&2; exit 1; }
+
           "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim \
-            -no-snapshot -gpu swiftshader_indirect &
-          adb wait-for-device
+            -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
+          emulator_pid=$!
+          # Bounded, and with the emulator's own log on failure. An emulator that never
+          # starts leaves adb blocking until the step's timeout, which turns a one-line
+          # failure into a thirty-minute one that says nothing.
+          timeout 300 adb wait-for-device || {
+            echo 'the emulator never came up' >&2
+            kill "$emulator_pid" 2>/dev/null || true
+            cat emulator.log >&2
+            exit 1
+          }
           # wait-for-device returns as soon as adbd answers, which is long before the
           # framework is up and /data is writable.
-          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
+          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done' || {
+            echo 'the emulator never finished booting' >&2
+            cat emulator.log >&2
+            exit 1
+          }
 
           cargo test --release --all-targets --no-run --target '${{ matrix.target }}' \
             --message-format=json > tests.jsonl
