@@ -374,11 +374,27 @@ jobs:
           sysroot=$sysroot/${{ matrix.target }}
           api=$ANDROID_API_LEVEL
 
-          file "$lib" | grep -q 'for Android' \
-            || { echo "not an Android object: $(file "$lib")" >&2; exit 1; }
+          # Deliberately not `file`: whether it prints the .note.android.ident line depends
+          # on the runner's libmagic, and ubuntu-24.04's does not read the note NDK r29
+          # writes. These three are the properties that actually distinguish a bionic build,
+          # and none of them moves with a toolchain version.
+          case '${{ matrix.target }}' in
+            aarch64-*) want=AArch64 ;;
+            x86_64-*) want='Advanced Micro Devices X86-64' ;;
+            *) echo 'no expected ELF machine for this target' >&2; exit 1 ;;
+          esac
+          machine=$(readelf -h "$lib" | sed -n 's/^ *Machine: *//p')
+          test "$machine" = "$want" \
+            || { echo "built for '$machine', wanted '$want'" >&2; exit 1; }
+          # bionic ships libc.so, not libc.so.6, and carries no symbol versioning at all --
+          # a library accidentally linked against glibc would have both.
+          readelf -d "$lib" | grep NEEDED
+          ! readelf -d "$lib" | grep -qE 'lib[a-z+_]+\.so\.[0-9]' \
+            || { echo 'linked against glibc rather than bionic' >&2; exit 1; }
+          test -z "$(readelf --wide -V "$lib" | grep -oE 'Name: [A-Za-z_]+_[A-Za-z0-9_.]+')" \
+            || { echo 'the library carries symbol version needs; bionic has none' >&2; exit 1; }
           # -static-libstdc++ should have taken the C++ runtime in. A NEEDED here would push
           # libc++_shared.so onto every consumer of the engine.
-          readelf -d "$lib" | grep NEEDED
           ! readelf -d "$lib" | grep -q 'libc++_shared' \
             || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
           # The version script leaves exactly the five entry points.
@@ -432,18 +448,44 @@ jobs:
           # The image the emulator runs, not the one the library targets: an API 24 binary
           # runs on any later Android, and the older system images are slower to boot and no
           # longer carry an x86_64 variant for every tag.
+          # avdmanager and the emulator disagree about where AVDs live when only
+          # ANDROID_SDK_HOME is set -- one writes $ANDROID_SDK_HOME/.android/avd, the other
+          # reads $ANDROID_SDK_HOME/avd -- and the emulator then reports the AVD as simply
+          # unknown. Both honour ANDROID_AVD_HOME ahead of everything else, so naming it
+          # settles the question.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+
           image="system-images;android-35;default;x86_64"
-          # Both of these read a few lines and exit, which hands the writer a SIGPIPE that
+          # yes reads nothing back and gets a SIGPIPE when sdkmanager stops asking, which
           # pipefail would turn into a failed step.
           ( set +o pipefail; yes | sdkmanager --licenses > /dev/null )
-          sdkmanager --install "$image" platform-tools emulator > /dev/null
+          sdkmanager --install "$image" platform-tools emulator
           ( set +o pipefail; echo no | avdmanager create avd -n ci -k "$image" --force )
+          # avdmanager reports success whether or not an AVD landed where the emulator will
+          # look for it.
+          avdmanager list avd | grep -qE '^ *Name: ci$' \
+            || { echo 'the AVD was not created' >&2; avdmanager list avd >&2; exit 1; }
+
           "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim \
-            -no-snapshot -gpu swiftshader_indirect &
-          adb wait-for-device
+            -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
+          emulator_pid=$!
+          # Bounded, and with the emulator's own log on failure. An emulator that never
+          # starts leaves adb blocking until the step's timeout, which turns a one-line
+          # failure into a thirty-minute one that says nothing.
+          timeout 300 adb wait-for-device || {
+            echo 'the emulator never came up' >&2
+            kill "$emulator_pid" 2>/dev/null || true
+            cat emulator.log >&2
+            exit 1
+          }
           # wait-for-device returns as soon as adbd answers, which is long before the
           # framework is up and /data is writable.
-          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
+          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done' || {
+            echo 'the emulator never finished booting' >&2
+            cat emulator.log >&2
+            exit 1
+          }
 
           cargo test --release --all-targets --no-run --target '${{ matrix.target }}' \
             --message-format=json > tests.jsonl
