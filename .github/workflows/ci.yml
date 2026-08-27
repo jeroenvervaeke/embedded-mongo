@@ -4,7 +4,13 @@ name: ci
 # workspace builds and tests on every published target without Bazel, and the wheel builds,
 # installs and imports. No job here compiles the engine -- that is native.yml.
 
-on: [push, pull_request]
+# workflow_dispatch because a manifest commit reaches master without one: native.yml pushes
+# it with GITHUB_TOKEN, and a push made with that token never triggers a workflow run. Until
+# the next ordinary push, this is the only way to check master at its actual head.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
