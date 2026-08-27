@@ -181,3 +181,114 @@ jobs:
   # The Android library is a Gradle build, so nothing above compiles a line of it: `test` cross
   # compiles the JNI crate, but the AAR, the ABIs it packages and the Kotlin wrapping the bridge
   # are built and tested only here.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # android/gradle/gradle-daemon-jvm.properties asks for 21, and AGP refuses a JDK newer
+          # than it supports -- which the runner's default becomes without warning.
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/embedded-mongodb
+          # Both ABIs share one content-addressed cache, so a single entry covers the job.
+          key: native-lib-android-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      # For the Rust standard library for each ABI, and for the check that the NDK on this runner
+      # carries the API level the engine was built against. The compilers it exports are not what
+      # compiles the bridge here: the Gradle task passes the pinned NDK's own, so the AAR is built
+      # with one toolchain wherever it is built.
+      - uses: ./.github/actions/android-ndk
+        with:
+          target: aarch64-linux-android
+      - uses: ./.github/actions/android-ndk
+        with:
+          target: x86_64-linux-android
+
+      - name: Install the NDK the library pins
+        run: |
+          set -euo pipefail
+          # Read rather than repeated: a bump in the build file must not leave CI compiling the
+          # bridge with a different NDK than a developer does.
+          version=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' android/embedded-mongodb/build.gradle.kts)
+          test -n "$version" \
+            || { echo '::error::could not read ndkVersion from the library build file'; exit 1; }
+          if [ -d "$ANDROID_HOME/ndk/$version" ]; then
+            echo "NDK $version is already installed"
+            exit 0
+          fi
+          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          # yes reads nothing back and takes a SIGPIPE when sdkmanager stops asking, which
+          # pipefail would turn into a failed step.
+          ( set +o pipefail; yes | "$sdkmanager" --licenses > /dev/null )
+          "$sdkmanager" --install "ndk;$version"
+
+      # For the dependency cache and the wrapper checksum check. Deliberately not v6: that
+      # release moved caching into a proprietary component with its own terms of use, and dropped
+      # the configuration-cache support this build relies on.
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Build the AAR, run the unit tests and lint
+        working-directory: android
+        # `build` carries assembleRelease, the JVM unit tests for both variants, the tests over
+        # the native packaging in buildSrc, and lint with warnings as errors. It also runs cargo
+        # for both ABIs, so a bridge that stopped compiling fails here too.
+        run: ./gradlew build
+
+      - name: Run the instrumented tests on an emulator
+        working-directory: android
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm || { echo 'no /dev/kvm on this runner' >&2; exit 1; }
+          sudo chmod 666 /dev/kvm
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          # avdmanager and the emulator disagree about where AVDs live when only
+          # ANDROID_SDK_HOME is set, and the emulator then reports the AVD as unknown. Both
+          # honour ANDROID_AVD_HOME ahead of everything else, so naming it settles the question.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+
+          # API 35, matching native.yml, and not an older image on purpose: the engine's x86_64
+          # build uses BMI1 and BMI2 instructions, and the CPU model the emulator gives an older
+          # system image does not carry them -- the library then dies with SIGILL inside
+          # System.loadLibrary. An image that needs it takes `-qemu -cpu host` below.
+          image="system-images;android-35;default;x86_64"
+          ( set +o pipefail; yes | sdkmanager --licenses > /dev/null )
+          sdkmanager --install "$image" platform-tools emulator
+          ( set +o pipefail; echo no | avdmanager create avd -n ci -k "$image" --force )
+          # avdmanager reports success whether or not an AVD landed where the emulator looks.
+          avdmanager list avd | grep -qE '^ *Name: ci$' \
+            || { echo 'the AVD was not created' >&2; avdmanager list avd >&2; exit 1; }
+
+          emulator -avd ci -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect > emulator.log 2>&1 &
+          emulator_pid=$!
+          # Bounded, with the emulator's own log on failure: an emulator that never starts
+          # otherwise leaves adb blocking until the step's timeout, saying nothing.
+          timeout 300 adb wait-for-device || {
+            echo 'the emulator never came up' >&2
+            kill "$emulator_pid" 2>/dev/null || true
+            cat emulator.log >&2
+            exit 1
+          }
+          # wait-for-device returns as soon as adbd answers, long before /data is writable.
+          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done' || {
+            echo 'the emulator never finished booting' >&2
+            cat emulator.log >&2
+            exit 1
+          }
+
+          ./gradlew :embedded-mongodb:connectedDebugAndroidTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aar
+          path: android/embedded-mongodb/build/outputs/aar/*.aar
+          if-no-files-found: error
+          retention-days: 7
