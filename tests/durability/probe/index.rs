@@ -1,4 +1,4 @@
-//! What a child reports about the secondary index a killed `createIndexes` left behind.
+//! What a child reports about a secondary index it found in a directory on disk.
 
 use super::{
     COLLECTION, DATABASE, INDEX,
@@ -13,10 +13,11 @@ use std::{path::Path, time::Instant};
 /// enough to catch an index that lost entries without making the probe a benchmark.
 pub const SAMPLED_BUCKETS: [i64; 8] = [0, 1, 7, 13, 31, 42, 58, 63];
 
-/// Reopens after a kill during `createIndexes` and reports whether the index is there and, if
-/// it is, whether it agrees with the data. Three counts per bucket: through the index, through
-/// a forced collection scan of the same field, and through a field that never had an index.
-/// A half-built index that the engine still considered usable would make them disagree.
+/// Reopens a directory and reports whether the secondary index is there and, if it is, whether
+/// it agrees with the data. Three counts per bucket: through the index, through a forced
+/// collection scan of the same field, and through a field that never had an index. An index
+/// that lost entries -- or a half-built one the engine still considered usable -- would make
+/// them disagree.
 pub fn verify_index(directory: &Path, documents: i64) -> Result<()> {
     let started = Instant::now();
     let client = Client::new(directory).context("reopening after the kill")?;
@@ -46,6 +47,10 @@ pub fn verify_index(directory: &Path, documents: i64) -> Result<()> {
             "n",
         )?;
         let unindexed = count(&database, doc! { "v": bucket })?;
+        // Also reported one number per key, in bucket order, so a probe can line the three
+        // counts up against each other instead of parsing them back out of the prose below.
+        result("indexed_count", indexed);
+        result("scanned_count", scanned);
         result(
             "bucket",
             format_args!("{bucket} indexed={indexed} scanned={scanned} unindexed={unindexed}"),

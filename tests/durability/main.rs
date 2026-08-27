@@ -13,9 +13,10 @@
 //! test run down with it.
 //!
 //! `crash` kills the engine, `contention` gives it a rival, `lifecycle` restarts it twenty
-//! times and `storage` takes its disk away. `reopened` is the odd one out: those probes pin
-//! defects this exercise turned up rather than guarantees, and they are written so that fixing
-//! the engine makes them fail.
+//! times, `storage` takes its disk away and `reopened` asks what a directory that came back
+//! from disk can still do. One probe is still the odd one out:
+//! `storage::an_unwritable_database_directory_aborts_the_process` pins a defect rather than a
+//! guarantee, and is written so that fixing the engine makes it fail.
 
 mod contention;
 mod crash;
