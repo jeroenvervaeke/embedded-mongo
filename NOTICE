@@ -34,14 +34,16 @@ of the pieces listed here.
                        0004  drop the replication implementation
                        0005  drop the sharding runtime
                        0006  drop the network stack
+                       0007  build against bionic and the Android NDK
 
                      Further modifications live in
                      embedded-mongodb-sys/native/, which supplies the library's
                      entry points and its standalone sharding state.
 
     Build            embedded-mongodb-sys/build_native.rs holds the exact Bazel
-                     invocation, and docs/native-size-reduction.md explains what
-                     each flag and patch is for. Reproduce with
+                     invocation, with the Android toolchain beside it in
+                     build_android.rs, and docs/native-size-reduction.md explains
+                     what each flag and patch is for. Reproduce with
                      EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1 cargo build --release.
 
 

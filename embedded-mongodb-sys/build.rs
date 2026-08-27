@@ -29,6 +29,7 @@ const ARTIFACT_PATHS: &[&str] = &[
     "patches",
     "embedded-mongodb-sys/native",
     "embedded-mongodb-sys/build_native.rs",
+    "embedded-mongodb-sys/build_android.rs",
 ];
 
 /// One published artifact. The asset name is recorded rather than derived, so that CI writes
@@ -57,10 +58,14 @@ fn main() {
         "EMBEDDED_MONGODB_BUILD_FROM_SOURCE",
         "EMBEDDED_MONGODB_CACHE_DIR",
         "EMBEDDED_MONGODB_BAZEL_JOBS",
+        "EMBEDDED_MONGODB_ANDROID_API",
         "CARGO_NET_OFFLINE",
         "BAZEL",
         "CC",
         "CXX",
+        "ANDROID_NDK_HOME",
+        "ANDROID_NDK_ROOT",
+        "ANDROID_NDK",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -76,6 +81,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/bridge.cc");
     println!("cargo:rerun-if-changed=prebuilt.rs");
     println!("cargo:rerun-if-changed=build_native.rs");
+    println!("cargo:rerun-if-changed=build_android.rs");
     let patches = workspace_root.join("patches");
     if patches.is_dir() {
         println!("cargo:rerun-if-changed={}", patches.display());

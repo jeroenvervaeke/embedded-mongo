@@ -113,3 +113,26 @@ cc_binary(
         "@//src/mongo/util:version_impl",
     ],
 )
+
+# Bazel resolves per-architecture sources and compiler flags from the target platform, so
+# cross-compiling the engine needs one that names the target CPU rather than the host's.
+# `use_native_toolchain` keeps the system-compiler toolchain in play, and
+# MONGO_NATIVE_TARGET_CPU tells that toolchain which CPU it is now targeting.
+#
+# Android is `@platforms//os:linux` here on purpose. It is a Linux kernel with a different
+# libc, and every `select()` in the engine and its third-party tree is written against
+# os:linux; naming os:android instead would leave hundreds of them with no matching branch.
+[
+    platform(
+        name = "linux_" + cpu + "_native",
+        constraint_values = [
+            "@platforms//os:linux",
+            "@platforms//cpu:" + cpu,
+            "@//bazel/platforms:use_native_toolchain",
+        ],
+    )
+    for cpu in [
+        "aarch64",
+        "x86_64",
+    ]
+]

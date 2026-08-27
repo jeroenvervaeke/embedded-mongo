@@ -3,6 +3,9 @@
 // the published library was built from: a fix to the downloader must not invalidate every
 // library already published, and a change to a Bazel flag must.
 
+// The NDK toolchain and the API level it targets, which are part of the library's ABI.
+include!("build_android.rs");
+
 fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     let mongo_root = workspace_root.join("mongo");
     assert!(
@@ -17,20 +20,29 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         "EMBEDDED_MONGODB_BAZEL_JOBS must be a positive integer"
     );
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    // Android brings its own toolchain, so neither CC nor CXX from the environment has any
+    // say in what compiles it.
+    let android = (target_os == "android").then(|| {
+        AndroidNdk::detect(&env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default())
+    });
     // `mongo/.bazelrc` makes `compiler_type` a command-line flag alias, so the value passed
     // below outranks `common:macos --//bazel/config:compiler_type=clang`. Falling back to
     // "gcc" unconditionally therefore fed GCC-only flags into Apple clang.
     let default_compiler_type = if target_os == "macos" { "clang" } else { "gcc" };
-    let compiler_type = env::var("CXX")
-        .or_else(|_| env::var("CC"))
-        .map(|compiler| {
-            if compiler.contains("clang") {
-                "clang"
-            } else {
-                "gcc"
-            }
-        })
-        .unwrap_or(default_compiler_type);
+    let compiler_type = if android.is_some() {
+        "clang"
+    } else {
+        env::var("CXX")
+            .or_else(|_| env::var("CC"))
+            .map(|compiler| {
+                if compiler.contains("clang") {
+                    "clang"
+                } else {
+                    "gcc"
+                }
+            })
+            .unwrap_or(default_compiler_type)
+    };
     let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
 
     eprintln!("building embedded MongoDB with Bazel");
@@ -131,6 +143,17 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
                 "-c",
                 "opt",
             ]),
+            // No LTO: the Linux flags above are GCC's, and lld cannot read GCC's IR. What
+            // lld has that bfd does not is identical code folding, so that goes on instead.
+            // -static-libstdc++ is what lets the .so ship on its own rather than beside
+            // libc++_shared.so, and -z defs turns the dangling references the patches leave
+            // behind into a link error rather than a failure to load on a device.
+            "android" => command.args([
+                "--linkopt=-Wl,--gc-sections",
+                "--linkopt=-Wl,--icf=all",
+                "--linkopt=-Wl,-z,defs,--strip-all",
+                "--linkopt=-static-libstdc++",
+            ]),
             _ => &mut command,
         };
     }
@@ -153,9 +176,16 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         // It collects profiling data nobody reads here, so switch it off everywhere rather
         // than only on the platform that has been seen to die from it.
         .arg("--noexperimental_collect_system_network_usage")
-        .arg("--copt=-include")
-        .arg("--copt=sys/syscall.h")
+        // Not --copt: that reaches assembly sources too, and Android's <android/api-level.h>
+        // -- which sys/syscall.h pulls in on bionic -- is C, not assembly.
+        .arg("--conlyopt=-include")
+        .arg("--conlyopt=sys/syscall.h")
+        .arg("--cxxopt=-include")
+        .arg("--cxxopt=sys/syscall.h")
         .arg("--copt=-fPIC");
+    if let Some(android) = &android {
+        android.apply(&mut command);
+    }
     if target_os == "macos" {
         // --config=native_toolchain sets --linker=lld, and CHOSEN_LINKER in
         // mongo/bazel/toolchains/cc/mongo_native/mongo_native_toolchain.BUILD.tmpl has no
