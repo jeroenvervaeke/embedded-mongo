@@ -374,11 +374,27 @@ jobs:
           sysroot=$sysroot/${{ matrix.target }}
           api=$ANDROID_API_LEVEL
 
-          file "$lib" | grep -q 'for Android' \
-            || { echo "not an Android object: $(file "$lib")" >&2; exit 1; }
+          # Deliberately not `file`: whether it prints the .note.android.ident line depends
+          # on the runner's libmagic, and ubuntu-24.04's does not read the note NDK r29
+          # writes. These three are the properties that actually distinguish a bionic build,
+          # and none of them moves with a toolchain version.
+          case '${{ matrix.target }}' in
+            aarch64-*) want=AArch64 ;;
+            x86_64-*) want='Advanced Micro Devices X86-64' ;;
+            *) echo 'no expected ELF machine for this target' >&2; exit 1 ;;
+          esac
+          machine=$(readelf -h "$lib" | sed -n 's/^ *Machine: *//p')
+          test "$machine" = "$want" \
+            || { echo "built for '$machine', wanted '$want'" >&2; exit 1; }
+          # bionic ships libc.so, not libc.so.6, and carries no symbol versioning at all --
+          # a library accidentally linked against glibc would have both.
+          readelf -d "$lib" | grep NEEDED
+          ! readelf -d "$lib" | grep -qE 'lib[a-z+_]+\.so\.[0-9]' \
+            || { echo 'linked against glibc rather than bionic' >&2; exit 1; }
+          test -z "$(readelf --wide -V "$lib" | grep -oE 'Name: [A-Za-z_]+_[A-Za-z0-9_.]+')" \
+            || { echo 'the library carries symbol version needs; bionic has none' >&2; exit 1; }
           # -static-libstdc++ should have taken the C++ runtime in. A NEEDED here would push
           # libc++_shared.so onto every consumer of the engine.
-          readelf -d "$lib" | grep NEEDED
           ! readelf -d "$lib" | grep -q 'libc++_shared' \
             || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
           # The version script leaves exactly the five entry points.
