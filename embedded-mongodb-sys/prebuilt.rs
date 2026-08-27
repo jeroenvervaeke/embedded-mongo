@@ -8,31 +8,45 @@
 // and commits the result back.
 
 /// Release holding the assets below.
-const RELEASE_TAG: &str = "native-06cde4d5dd02";
+const RELEASE_TAG: &str = "native-809d4cb2632b";
 /// Repository commit CI built them from. `build.rs` compares this checkout's native inputs
 /// against it and refuses to use a library that no longer matches.
-const SOURCE_COMMIT: &str = "f7d993f383646ad65976fa20be6208e69fa2ba60";
+const SOURCE_COMMIT: &str = "f5859d5492e90cfdaf92ae9f291706c2ad52ae62";
 const BASE_URL: &str = "https://github.com/jeroenvervaeke/embedded-mongo/releases/download";
 
 static PREBUILT: &[Prebuilt] = &[
     Prebuilt {
         target: "aarch64-apple-darwin",
         asset: "libembedded_mongodb_native-aarch64-apple-darwin.so",
-        sha256: "b4c6074859b29fb7e3673133447308b67b0fe467a2c87521896fe32f9988451a",
-        size: 72745856,
+        sha256: "932c60cb8c0d0a2869b9cb2100fb58c86d366bfae44f0a0d6d3783d0dad1ded4",
+        size: 72681152,
+        glibc_min: None,
+    },
+    Prebuilt {
+        target: "aarch64-linux-android",
+        asset: "libembedded_mongodb_native-aarch64-linux-android.so",
+        sha256: "536d0d0274c87b5af8b54a49779629bd1bfefab5cd2081a40617b80cfc5c48c5",
+        size: 48548024,
         glibc_min: None,
     },
     Prebuilt {
         target: "aarch64-unknown-linux-gnu",
         asset: "libembedded_mongodb_native-aarch64-unknown-linux-gnu.so",
-        sha256: "044a8fe902fbe4da732b682ad37eed117b9fd31c8d647480bb776adad397a24a",
+        sha256: "8a9ee0cb0e26f401033d45d645e6f99c8675a17a0febd53197430954142a4bc2",
         size: 37387448,
         glibc_min: Some((2, 38)),
     },
     Prebuilt {
+        target: "x86_64-linux-android",
+        asset: "libembedded_mongodb_native-x86_64-linux-android.so",
+        sha256: "0cea533d6a834cfd77678c48d2db82af6ddb772503859121bb3c4aee60571414",
+        size: 48005976,
+        glibc_min: None,
+    },
+    Prebuilt {
         target: "x86_64-unknown-linux-gnu",
         asset: "libembedded_mongodb_native-x86_64-unknown-linux-gnu.so",
-        sha256: "08b4e5b31789da95bc7ea412085e5011cb1b491642d2e198314cc8d870933e51",
+        sha256: "24cb2df963e7af23c2bb64fd4f3e5a92cf2c55ba3a99befbeaafb5a6341e6ec4",
         size: 34525944,
         glibc_min: Some((2, 38)),
     },
