@@ -1,0 +1,303 @@
+--- a/bazel/toolchains/cc/mongo_native/mongo_native_toolchain.BUILD.tmpl
++++ b/bazel/toolchains/cc/mongo_native/mongo_native_toolchain.BUILD.tmpl
+@@ -129,14 +129,14 @@ mongo_linux_cc_toolchain_config(
+         "gcc": "{cc}",
+         "g++": "{cxx}",
+         "cpp": "/usr/bin/cpp",
+-        "ar": "/usr/bin/ar",
+-        "nm": "/usr/bin/nm",
+-        "ld": "/usr/bin/ld",
+-        "as": "/usr/bin/as",
+-        "dwp": "/usr/bin/dwp",
+-        "objcopy": "/usr/bin/objcopy",
+-        "objdump": "/usr/bin/objdump",
+-        "strip": "/usr/bin/strip",
++        "ar": "{ar}",
++        "nm": "{nm}",
++        "ld": "{ld}",
++        "as": "{as}",
++        "dwp": "{dwp}",
++        "objcopy": "{objcopy}",
++        "objdump": "{objdump}",
++        "strip": "{strip}",
+         "gcov": "/bin/false",
+         "llvm-cov": "/bin/false",
+     },
+@@ -167,7 +167,7 @@ toolchain(
+     name = "mongo_native_toolchain",
+     exec_compatible_with = [
+         "@platforms//os:linux",
+-        "@platforms//cpu:{bazel_cpu}",
++        "@platforms//cpu:{exec_cpu}",
+         "@//bazel/platforms:use_native_toolchain",
+     ],
+     target_compatible_with = [
+--- a/bazel/toolchains/cc/mongo_native/native_toolchain.bzl
++++ b/bazel/toolchains/cc/mongo_native/native_toolchain.bzl
+@@ -35,16 +35,40 @@ def _detect_builtin_include_dirs(ctx, compiler, lang_flag):
+                 dirs.append(entry)
+     return dirs
+ 
++_BAZEL_CPUS = {
++    "amd64": "x86_64",
++    "x86_64": "x86_64",
++    "aarch64": "aarch64",
++    "arm64": "aarch64",
++    "ppc64le": "ppc",
++    "s390x": "s390x",
++}
++
++# Host binutils by default. A cross build overrides them with tools that understand the
++# target architecture -- llvm-ar and friends from a toolchain like the Android NDK.
++_BINUTILS = {
++    "ar": "AR",
++    "nm": "NM",
++    "ld": "LD",
++    "as": "AS",
++    "dwp": "DWP",
++    "objcopy": "OBJCOPY",
++    "objdump": "OBJDUMP",
++    "strip": "STRIP",
++}
++
+ def _setup_mongo_native_toolchain(ctx):
+-    arch = ctx.os.arch
+-    bazel_cpu = {
+-        "amd64": "x86_64",
+-        "x86_64": "x86_64",
+-        "aarch64": "aarch64",
+-        "arm64": "aarch64",
+-        "ppc64le": "ppc",
+-        "s390x": "s390x",
+-    }.get(arch, arch)
++    exec_cpu = _BAZEL_CPUS.get(ctx.os.arch, ctx.os.arch)
++
++    # Cross builds compile for one architecture on another, so the toolchain's target
++    # constraint and its arch-specific flags come from the target, not from the host.
++    target_arch = ctx.os.environ.get("MONGO_NATIVE_TARGET_CPU", ctx.os.arch)
++    bazel_cpu = _BAZEL_CPUS.get(target_arch, target_arch)
++
++    binutils = {
++        tool: ctx.os.environ.get(env, "/usr/bin/" + tool)
++        for tool, env in _BINUTILS.items()
++    }
+ 
+     def _fmt_list(items):
+         return "".join(['\n        "%s",' % i for i in items])
+@@ -53,14 +77,15 @@ def _setup_mongo_native_toolchain(ctx):
+         ctx.template(
+             "BUILD.bazel",
+             ctx.attr.build_tpl,
+-            substitutions = {
++            substitutions = dict({
+                 "{cc}": "cc",
+                 "{cxx}": "c++",
+                 "{bazel_cpu}": bazel_cpu,
++                "{exec_cpu}": exec_cpu,
+                 "{all_include_dirs}": "",
+                 "{c_include_dirs}": "",
+                 "{cpp_only_include_dirs}": "",
+-            },
++            }.items() + [("{%s}" % tool, path) for tool, path in binutils.items()]),
+         )
+         return
+ 
+@@ -78,14 +103,15 @@ def _setup_mongo_native_toolchain(ctx):
+     ctx.template(
+         "BUILD.bazel",
+         ctx.attr.build_tpl,
+-        substitutions = {
++        substitutions = dict({
+             "{cc}": cc,
+             "{cxx}": cxx,
+             "{bazel_cpu}": bazel_cpu,
++            "{exec_cpu}": exec_cpu,
+             "{all_include_dirs}": _fmt_list(all_dirs),
+             "{c_include_dirs}": _fmt_list(c_dirs),
+             "{cpp_only_include_dirs}": _fmt_list(cpp_only_dirs),
+-        },
++        }.items() + [("{%s}" % tool, path) for tool, path in binutils.items()]),
+     )
+ 
+ setup_mongo_native_toolchain = repository_rule(
+@@ -95,6 +121,6 @@ setup_mongo_native_toolchain = repository_rule(
+             default = "//bazel/toolchains/cc/mongo_native:mongo_native_toolchain.BUILD.tmpl",
+         ),
+     },
+-    environ = ["CC", "CXX", "USE_NATIVE_TOOLCHAIN"],
++    environ = ["CC", "CXX", "USE_NATIVE_TOOLCHAIN", "MONGO_NATIVE_TARGET_CPU"] + _BINUTILS.values(),
+     configure = True,
+ )
+--- a/src/mongo/bson/column/bsoncolumn_helpers.h
++++ b/src/mongo/bson/column/bsoncolumn_helpers.h
+@@ -28,7 +28,7 @@ namespace mongo::bsoncolumn {
+  * BSONColumn decompression.
+  */
+ template <class T>
+-concept Appendable [[MONGO_MOD_PUBLIC]] = requires(T& t,
++concept Appendable MONGO_MOD_CONCEPT_PUBLIC = requires(T& t,
+                                                    std::string_view strVal,
+                                                    BSONBinData binVal,
+                                                    BSONCode codeVal,
+@@ -96,7 +96,7 @@ concept Appendable [[MONGO_MOD_PUBLIC]] = requires(T& t,
+  * materializePreallocated() instead of materialize().
+  */
+ template <class T>
+-concept Materializer [[MONGO_MOD_PUBLIC]] = requires(T& t,
++concept Materializer MONGO_MOD_CONCEPT_PUBLIC = requires(T& t,
+                                                      BSONElementStorage& alloc,
+                                                      std::string_view strVal,
+                                                      BSONBinData binVal,
+@@ -151,7 +151,7 @@ concept Materializer [[MONGO_MOD_PUBLIC]] = requires(T& t,
+  * to collect the position information of values within documents.
+  */
+ template <typename T>
+-concept PositionInfoAppender [[MONGO_MOD_PUBLIC]] = requires(T& t, int32_t n) {
++concept PositionInfoAppender MONGO_MOD_CONCEPT_PUBLIC = requires(T& t, int32_t n) {
+     { t.appendPositionInfo(n) } -> std::same_as<void>;
+ };
+ 
+--- a/src/mongo/db/timeseries/timeseries_request_util.h
++++ b/src/mongo/db/timeseries/timeseries_request_util.h
+@@ -28,7 +28,7 @@ template <typename T>
+ concept HasGetIsTimeseriesNamespace = requires(const T& t) { t.getIsTimeseriesNamespace(); };
+ 
+ template <typename T>
+-concept IsRequestableOnTimeseries [[MONGO_MOD_PUBLIC]] =
++concept IsRequestableOnTimeseries MONGO_MOD_CONCEPT_PUBLIC =
+     HasGetNs<T> || HasGetNamespace<T> || HasGetNsString<T> || HasGetNamespaceOrUUID<T>;
+ 
+ 
+--- a/src/mongo/platform/throw_hook.h
++++ b/src/mongo/platform/throw_hook.h
+@@ -21,9 +21,34 @@ namespace mongo {
+  * The __do_catch call in the implementation is part of the Linux C++
+  * ABI, but not part of the C++ standard.
+  */
++#ifdef _LIBCPP_VERSION
++namespace __cxxabiv1 {
++/**
++ * libc++abi's implementation of std::type_info. Its can_catch() is the counterpart of
++ * libstdc++'s __do_catch(); libc++abi keeps the declaration in a private header, so it is
++ * repeated here. Nothing constructs one and no virtual is defined here, so no vtable for
++ * this class is emitted.
++ */
++class __shim_type_info : public std::type_info {
++public:
++    ~__shim_type_info() override;
++    virtual void noop1() const;
++    virtual void noop2() const;
++    virtual bool can_catch(const __shim_type_info* thrown_type, void*& adjustedPtr) const;
++};
++}  // namespace __cxxabiv1
++#endif
++
+ template <typename T>
+ T* catchCast(std::type_info* tinfo, void* obj) {
++#ifdef _LIBCPP_VERSION
++    const auto* target = static_cast<const __cxxabiv1::__shim_type_info*>(&typeid(T));
++    const auto* thrown = static_cast<const __cxxabiv1::__shim_type_info*>(
++        static_cast<const std::type_info*>(tinfo));
++    return target->can_catch(thrown, obj) ? static_cast<T*>(obj) : nullptr;
++#else
+     return typeid(T).__do_catch(tinfo, &obj, 1) ? static_cast<T*>(obj) : nullptr;
++#endif
+ }
+ 
+ using ThrowHook = std::function<void(std::type_info*, void*)>;
+--- a/src/mongo/util/dns_query_posix-impl.h
++++ b/src/mongo/util/dns_query_posix-impl.h
+@@ -172,7 +172,7 @@ public:
+     }
+ 
+     Seconds getTtl() const {
+-        return Seconds(ns_rr_ttl(this->_resource_record));
++        return Seconds(static_cast<std::int64_t>(ns_rr_ttl(this->_resource_record)));
+     }
+ 
+ private:
+@@ -315,6 +315,15 @@ public:
+     std::vector<std::uint8_t> raw_lookup(const std::string& service,
+                                          const DNSQueryClass class_,
+                                          const DNSQueryType type) {
++#ifdef __ANDROID__
++        // ponytail: bionic keeps res_nsearch private; the public replacement is the
++        // fd-based android_res_nquery() in <android/multinetwork.h>, which needs a link
++        // against libandroid. Wire that up if this build ever needs to resolve names.
++        std::ostringstream oss;
++        oss << "Failed to look up service \"" << service
++            << "\": DNS resolution is not available on Android";
++        uasserted(ErrorCodes::DNSHostNotFound, oss.str());
++#else
+         std::vector<std::uint8_t> result(kMaxExpectedDNSResponseSize);
+         const int size = res_nsearch(
+             &_state, service.c_str(), int(class_), int(type), &result[0], result.size());
+@@ -327,6 +336,7 @@ public:
+         result.resize(size);
+ 
+         return result;
++#endif
+     }
+ 
+     DNSResponse lookup(const std::string& service,
+@@ -336,6 +346,10 @@ public:
+     }
+ 
+ public:
++#ifdef __ANDROID__
++    ~DNSQueryState() = default;
++    DNSQueryState() = default;
++#else
+     ~DNSQueryState() {
+         res_nclose(&_state);
+     }
+@@ -346,9 +360,12 @@ public:
+         std::lock_guard<std::mutex> lk(_staticMutex);
+         res_ninit(&_state);
+     }
++#endif
+ 
+ private:
++#ifndef __ANDROID__
+     struct __res_state _state;
++#endif
+     static std::mutex _staticMutex;
+ };
+ 
+--- a/src/mongo/util/modules.h
++++ b/src/mongo/util/modules.h
+@@ -114,8 +114,22 @@
+ // Implementation details for MONGO_MOD macros
+ //
+ 
+-#if MONGO_COMPILER_HAS_ATTRIBUTE(clang::annotate)
++// clang rejects an attribute list on a concept definition before clang 20, and several
++// concepts carry a MONGO_MOD_* marker. The markers only feed MongoDB's module-visibility
++// linter, so an older clang can simply drop them.
++#if MONGO_COMPILER_HAS_ATTRIBUTE(clang::annotate) && \
++    !(defined(__clang_major__) && __clang_major__ < 20)
+ #define MONGO_MOD_ATTR_(attr) clang::annotate("mongo::mod::" #attr)
++#define MONGO_MOD_CONCEPT_ATTR_(attr) [[MONGO_MOD_ATTR_(attr)]]
+ #else
+ #define MONGO_MOD_ATTR_(attr)
++// An empty attribute list is still an attribute list, which those clangs reject just as
++// readily, so the brackets have to go with it.
++#define MONGO_MOD_CONCEPT_ATTR_(attr)
+ #endif
++
++/**
++ * MONGO_MOD_PUBLIC for a concept definition, brackets included: `concept Foo
++ * MONGO_MOD_CONCEPT_PUBLIC = ...`.
++ */
++#define MONGO_MOD_CONCEPT_PUBLIC MONGO_MOD_CONCEPT_ATTR_(public)
+--- a/src/third_party/libmongocrypt/dist/src/os_posix/os_dll.c
++++ b/src/third_party/libmongocrypt/dist/src/os_posix/os_dll.c
+@@ -103,7 +103,7 @@ bool mcr_dll_path_supported(void) {
+     return true;
+ }
+ 
+-#elif defined(__linux__) || defined(__FreeBSD__)
++#elif (defined(__linux__) && !defined(__ANDROID__)) || defined(__FreeBSD__)
+ 
+ #include <link.h>
+ 

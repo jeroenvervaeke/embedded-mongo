@@ -1,0 +1,48 @@
+name: Android NDK
+description: >-
+  Exports the NDK toolchain for one Android target -- the compiler, archiver and linker that
+  cargo and the cc-based crates need -- at the API level build_android.rs pins, and installs
+  the Rust standard library for it. Needs the repository checked out.
+
+inputs:
+  target:
+    description: Rust target triple, for example aarch64-linux-android.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        ndk=${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-}}
+        test -d "$ndk" || { echo 'no Android NDK on this runner' >&2; exit 1; }
+        bin=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin
+
+        # Read the API level from the source of truth. build_android.rs decides what the
+        # engine is compiled against, and the bridge beside it has to agree; a bump there
+        # must not leave CI pairing an API 24 engine with an API 35 bridge.
+        api=$(sed -n 's/^const ANDROID_API_LEVEL: &str = "\([0-9][0-9]*\)";/\1/p' \
+              embedded-mongodb-sys/build_android.rs)
+        test -n "$api" \
+          || { echo 'could not read ANDROID_API_LEVEL from build_android.rs' >&2; exit 1; }
+        test -x "$bin/${{ inputs.target }}$api-clang" \
+          || { echo "$ndk has no clang for ${{ inputs.target }} at API $api" >&2; exit 1; }
+        echo "NDK $ndk, API $api"
+
+        # cc accepts the underscored spelling of the per-target variables, and a shell cannot
+        # export the other one. cc has no NDK of its own to fall back on, so without these the
+        # cxx and link-cplusplus build scripts reach for a bare `<triple>-clang++`, which the
+        # NDK does not ship.
+        suffix=$(echo '${{ inputs.target }}' | tr - _)
+        {
+          echo "ANDROID_NDK_HOME=$ndk"
+          echo "ANDROID_NDK_BIN=$bin"
+          echo "ANDROID_API_LEVEL=$api"
+          echo "CC_$suffix=$bin/${{ inputs.target }}$api-clang"
+          echo "CXX_$suffix=$bin/${{ inputs.target }}$api-clang++"
+          echo "AR_$suffix=$bin/llvm-ar"
+          echo "CARGO_TARGET_$(echo "$suffix" | tr 'a-z' 'A-Z')_LINKER=$bin/${{ inputs.target }}$api-clang"
+        } >> "$GITHUB_ENV"
+
+        rustup target add '${{ inputs.target }}'

@@ -89,6 +89,12 @@ jobs:
           # build.rs resolves the cache under Library/Caches on macOS; caching ~/.cache there
           # is a silent no-op that re-downloads the library on every job.
           - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+          # Android cross-compiles rather than runs: what a pull request can regress is that
+          # the published library still downloads, links and matches the bridge beside it.
+          # Proving the engine initialises needs a device, which native.yml does on an
+          # emulator at the moment the library is built.
+          - { target: aarch64-linux-android, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb, cross: 'yes' }
+          - { target: x86_64-linux-android, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb, cross: 'yes' }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -98,8 +104,16 @@ jobs:
         with:
           path: ${{ matrix.cache }}
           key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
-      - run: cargo test --release --all-targets
-      - run: cargo run --release --example basic
+      - if: matrix.cross
+        uses: ./.github/actions/android-ndk
+        with:
+          target: ${{ matrix.target }}
+      - if: matrix.cross
+        run: cargo test --release --all-targets --no-run --target ${{ matrix.target }}
+      - if: '!matrix.cross'
+        run: cargo test --release --all-targets
+      - if: '!matrix.cross'
+        run: cargo run --release --example basic
 
   wheel:
     strategy:
