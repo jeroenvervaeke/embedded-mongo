@@ -67,6 +67,21 @@ jobs:
             runner: macos-15
             min_size: 25000000
             max_size: 90000000
+          # Both Android ABIs cross-compile from the same x86_64 runner: the NDK's clang
+          # targets either from any host, so there is no arm64 leg to wait on. They get
+          # --gc-sections and the version script like the other Linux targets, but no LTO --
+          # those flags are GCC/bfd-specific and lld cannot read GCC's IR -- so they land
+          # around 47 MB rather than 34.
+          - target: aarch64-linux-android
+            runner: ubuntu-24.04
+            android: 'yes'
+            min_size: 35000000
+            max_size: 60000000
+          - target: x86_64-linux-android
+            runner: ubuntu-24.04
+            android: 'yes'
+            min_size: 35000000
+            max_size: 60000000
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     steps:
@@ -188,6 +203,12 @@ jobs:
           mkdir -p dist
           echo "reused $(wc -c < stage/libembedded_mongodb_native.so) bytes from run ${{ inputs.reuse_run }}"
 
+      - name: Point the build at the Android NDK
+        if: matrix.android
+        uses: ./.github/actions/android-ndk
+        with:
+          target: ${{ matrix.target }}
+
       - name: Build the native library
         id: bazel
         if: inputs.reuse_run == ''
@@ -201,7 +222,12 @@ jobs:
           EMBEDDED_MONGODB_BAZEL_JOBS: ${{ runner.os == 'macOS' && '3' || '4' }}
         run: |
           set -euo pipefail
-          if [ "${{ runner.os }}" = Linux ]; then
+          # The Android toolchain is already in the environment; the step above put it
+          # there. Everything else compiles for the host.
+          cargo_target=''
+          if [ -n "${{ matrix.android }}" ]; then
+            cargo_target="--target ${{ matrix.target }}"
+          elif [ "${{ runner.os }}" = Linux ]; then
             # The image ships 12, 13 and 14; unsuffixed gcc is 13, below mongo's 14.2 floor,
             # while manylinux_2_39 tolerates at most 14. Exactly one usable version.
             export CC=gcc-14 CXX=g++-14
@@ -239,7 +265,8 @@ jobs:
           # build script's emitted lines onto stdout, interleaved with the JSON: piping that
           # into jq killed jq on the first one two minutes in, and pipefail then failed the
           # step 2h40m later when cargo finally exited -- after a build that had succeeded.
-          cargo build --release -vv -p embedded-mongodb-sys --message-format=json > build.jsonl
+          cargo build --release -vv -p embedded-mongodb-sys $cargo_target \
+            --message-format=json > build.jsonl
 
           # fromjson? skips those interleaved lines instead of dying on them.
           out_dir=$(jq -Rr 'fromjson?
@@ -315,7 +342,7 @@ jobs:
 
       - name: Check the glibc and C++ ABI floor
         id: floor
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.android
         run: |
           set -euo pipefail
           # maturin will not catch this. It keeps the requested manylinux tag when no policy
@@ -338,13 +365,115 @@ jobs:
           echo "glibc floor: $max"
           echo "glibc_min=${max#GLIBC_}" >> "$GITHUB_OUTPUT"
 
+      - name: Check the Android library against bionic
+        if: matrix.android
+        run: |
+          set -euo pipefail
+          lib=stage/libembedded_mongodb_native.so
+          sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib
+          sysroot=$sysroot/${{ matrix.target }}
+          api=$ANDROID_API_LEVEL
+
+          file "$lib" | grep -q 'for Android' \
+            || { echo "not an Android object: $(file "$lib")" >&2; exit 1; }
+          # -static-libstdc++ should have taken the C++ runtime in. A NEEDED here would push
+          # libc++_shared.so onto every consumer of the engine.
+          readelf -d "$lib" | grep NEEDED
+          ! readelf -d "$lib" | grep -q 'libc++_shared' \
+            || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
+          # The version script leaves exactly the five entry points.
+          exports=$(nm -D --defined-only "$lib" | grep -c ' T embedded_mongodb_' || true)
+          test "$exports" -eq 5 \
+            || { echo "expected 5 exported entry points, found $exports" >&2; exit 1; }
+
+          # A shared library records what it needs but is never asked to resolve it until a
+          # process loads it, so a missing bionic symbol is invisible to the link and fatal at
+          # dlopen. Resolve every one of them here against the NDK's own stubs for this API
+          # level, which is the same set the device provides.
+          nm -D --undefined-only "$lib" | awk '$1 == "U" {sub(/@.*/, "", $2); print $2}' \
+            | sort -u > wanted.txt
+          for stub in libc.so libm.so libdl.so; do
+            nm -D --defined-only "$sysroot/$api/$stub"
+          done | awk 'NF > 1 {sub(/@.*/, "", $NF); print $NF}' | sort -u > provided.txt
+          missing=$(comm -23 wanted.txt provided.txt)
+          # Weak undefined symbols are the exception: zstd declares four optional tracing
+          # hooks it never defines, and the loader is content to leave them null.
+          weak=$(nm -D "$lib" | awk '$1 == "w" {sub(/@.*/, "", $2); print $2}' | sort -u)
+          missing=$(comm -23 <(printf '%s\n' "$missing" | sed '/^$/d') \
+                             <(printf '%s\n' "$weak" | sed '/^$/d'))
+          test -z "$missing" \
+            || { echo "not provided by bionic at API $api:" >&2; echo "$missing" >&2; exit 1; }
+          echo "all $(wc -l < wanted.txt) imported symbols resolve against bionic API $api"
+
       - name: Smoke test -- load the library and run the suite
+        if: '!matrix.android'
         env:
           EMBEDDED_MONGODB_NATIVE_LIB_DIR: ${{ github.workspace }}/stage
         run: |
           # Nothing above opens the library. A size band and a symbol table do not prove the
           # engine initialises, and a linked-but-dead blob is a real failure mode here.
           cargo test --release --all-targets
+
+      - name: Smoke test -- run the suite on an Android emulator
+        # x86_64 only. The emulator runs arm64 images through full-system emulation, which
+        # takes this suite from seconds to well past any sensible job budget; the two ABIs
+        # come off the same sources and the same flags, so what this proves for one is what
+        # the symbol check above proves for the other.
+        if: matrix.target == 'x86_64-linux-android'
+        timeout-minutes: 30
+        env:
+          EMBEDDED_MONGODB_NATIVE_LIB_DIR: ${{ github.workspace }}/stage
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm || { echo 'no /dev/kvm on this runner' >&2; exit 1; }
+          sudo chmod 666 /dev/kvm
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          # The image the emulator runs, not the one the library targets: an API 24 binary
+          # runs on any later Android, and the older system images are slower to boot and no
+          # longer carry an x86_64 variant for every tag.
+          image="system-images;android-35;default;x86_64"
+          # Both of these read a few lines and exit, which hands the writer a SIGPIPE that
+          # pipefail would turn into a failed step.
+          ( set +o pipefail; yes | sdkmanager --licenses > /dev/null )
+          sdkmanager --install "$image" platform-tools emulator > /dev/null
+          ( set +o pipefail; echo no | avdmanager create avd -n ci -k "$image" --force )
+          "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect &
+          adb wait-for-device
+          # wait-for-device returns as soon as adbd answers, which is long before the
+          # framework is up and /data is writable.
+          timeout 600 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
+
+          cargo test --release --all-targets --no-run --target '${{ matrix.target }}' \
+            --message-format=json > tests.jsonl
+          # The lib and integration-test binaries, which are the suite. Examples compiled as
+          # tests hold none, and the criterion bench is not a libtest harness at all -- it
+          # rejects the arguments below and would fail the step on its usage message.
+          mapfile -t binaries < <(jq -r 'select(.executable != null)
+                                         | select(.target.kind | any(. == "lib" or . == "test"))
+                                         | .executable' tests.jsonl)
+          test "${#binaries[@]}" -gt 0 || { echo 'no test binaries were built' >&2; exit 1; }
+
+          remote=/data/local/tmp/embedded-mongodb
+          adb shell rm -rf "$remote"
+          adb shell mkdir -p "$remote"
+          adb push stage/libembedded_mongodb_native.so "$remote/"
+          adb shell chmod 755 "$remote/libembedded_mongodb_native.so"
+          # The engine is static-libc++, but the cxx bridge inside the test binary is not.
+          sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib
+          adb push "$sysroot/${{ matrix.target }}/libc++_shared.so" "$remote/"
+          for binary in "${binaries[@]}"; do
+            name=$(basename "$binary")
+            adb push "$binary" "$remote/$name"
+            adb shell chmod 755 "$remote/$name"
+            echo "--- $name"
+            # adb shell exits 0 whatever the command did, so carry the status out by hand.
+            # tr: the device's line endings are CRLF, which no anchored pattern would match.
+            adb shell "cd $remote && LD_LIBRARY_PATH=$remote TMPDIR=$remote ./$name \
+              --test-threads=1; echo exit=\$?" | tr -d '\r' | tee output.txt
+            grep -qx 'exit=0' output.txt || { echo "$name failed on the device" >&2; exit 1; }
+          done
 
       - name: Stage the release assets
         run: |
@@ -359,8 +488,9 @@ jobs:
         # x86_64 Linux only: the notices ship once, and this is the widest link. cpptrace and
         # libdwarf are `target_compatible_with @platforms//os:linux`, and macOS subtracts from
         # the component set rather than adding to it -- it drops the version script and LTO
-        # but pulls in nothing extra. A macOS-only third-party dependency would slip past
-        # this; nothing in native/BUILD.bazel has one today.
+        # but pulls in nothing extra. Android builds as os:linux and so links the same
+        # components as this leg. A macOS-only third-party dependency would slip past this;
+        # nothing in native/BUILD.bazel has one today.
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           set -euo pipefail
@@ -413,7 +543,8 @@ jobs:
           # reuses it, instead of minting a second tag holding byte-identical libraries --
           # which is exactly what a HEAD-derived tag did.
           key=$(git ls-tree HEAD -- patches embedded-mongodb-sys/native \
-                  embedded-mongodb-sys/build_native.rs mongo | sha256sum | cut -c1-12)
+                  embedded-mongodb-sys/build_native.rs \
+                  embedded-mongodb-sys/build_android.rs mongo | sha256sum | cut -c1-12)
           test -n "$key" || { echo 'could not compute an engine key' >&2; exit 1; }
           echo "engine key: $key"
           echo "tag=native-$key" >> "$GITHUB_OUTPUT"
@@ -431,10 +562,11 @@ jobs:
             \( -name 'libembedded_mongodb_native-*.so' -o -name '*.sha256' \
                -o -name '*.glibc' -o -name 'THIRD-PARTY-NOTICES' \) \
             -exec mv -t dist/ {} +
-          # Three targets, each contributing a library, a digest and a glibc floor, plus one
-          # notices file. Anything else means an artifact was missing or a name changed.
+          # Five targets, each contributing a library and a digest -- and a glibc floor for
+          # the three built against glibc -- plus one notices file. Anything else means an
+          # artifact was missing or a name changed.
           libraries=$(ls dist/libembedded_mongodb_native-*.so | wc -l)
-          test "$libraries" -eq 3 || { echo "expected 3 libraries, found $libraries" >&2; exit 1; }
+          test "$libraries" -eq 5 || { echo "expected 5 libraries, found $libraries" >&2; exit 1; }
           test -s dist/THIRD-PARTY-NOTICES || { echo 'no THIRD-PARTY-NOTICES' >&2; exit 1; }
           # The licence, the modification notice and the directions to the corresponding
           # source travel with the object code. Flat files rather than an archive, so the
@@ -507,7 +639,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        include:
+          - runner: ubuntu-24.04
+          - runner: ubuntu-24.04-arm
+          - runner: macos-15
+          # The Android rows prove the two new manifest entries download and link. Running
+          # the suite needs a device, and the build job already did that on an emulator
+          # against the same bytes this release holds.
+          - runner: ubuntu-24.04
+            target: aarch64-linux-android
+          - runner: ubuntu-24.04
+            target: x86_64-linux-android
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -519,8 +661,17 @@ jobs:
         with:
           python-version: '3.13'
       # No submodule: proving the download path needs no engine source.
-      - run: cargo test --release --all-targets
+      - if: '!matrix.target'
+        run: cargo test --release --all-targets
+      - if: matrix.target
+        uses: ./.github/actions/android-ndk
+        with:
+          target: ${{ matrix.target }}
+      - name: Download the Android library and link a test binary against it
+        if: matrix.target
+        run: cargo test --release --all-targets --no-run --target '${{ matrix.target }}'
       - name: Build the wheel and check the engine is inside it
+        if: '!matrix.target'
         run: |
           set -euo pipefail
           # Built, not installed: the package is not on PyPI and needs a PyMongo that only
