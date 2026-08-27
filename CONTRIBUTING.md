@@ -143,7 +143,7 @@ what to use for a dry run.
    time — and the x86_64 ABI then runs the suite on an emulator.
 2. **publish** — creates the release, uploads the libraries plus `LICENSE`, `NOTICE` and a
    `THIRD-PARTY-NOTICES` assembled from the actual link, then regenerates
-   `embedded-mongodb-sys/prebuilt.rs` and commits it as `github-actions[bot]`.
+   `embedded-mongodb-sys/prebuilt.rs` and pushes it as the GitHub App.
 3. **verify** — re-tests the published artifacts on every target *through* the committed
    manifest, and builds the Python wheel to confirm the engine is vendored into it.
 
@@ -156,9 +156,18 @@ this pipeline owns, which is that a wheel built against the published library co
 `prebuilt.rs` is `@generated`. Never edit it by hand; the generator recomputes every digest
 from the library itself rather than trusting the sidecar that came with it.
 
-`verify` exists because a push made with `GITHUB_TOKEN` never triggers another workflow run,
-so `ci.yml` will not see the manifest commit. Without it, the least-reviewed commit in the
-repository would ship unchecked.
+The manifest commit is pushed by a GitHub App, not with `GITHUB_TOKEN`. A push made with
+`GITHUB_TOKEN` never triggers another workflow run, so `ci.yml` never saw that commit — the
+least-reviewed commit in the repository — until somebody pushed again. An app's push is an
+ordinary push, so `ci.yml` now runs on it.
+
+That needs an app installed on the repository with `contents: write`, its id in the `APP_ID`
+variable and its private key in the `APP_PRIVATE_KEY` secret. Both are read at the top of the
+`publish` job, so a missing one fails before the release is created rather than after.
+
+`verify` still runs. It overlaps with what `ci.yml` now does, and is kept because it is tied
+to this release: it starts the moment the assets are published, on the ref that published
+them, and its failure is this run's failure rather than a separate one nobody is watching.
 
 ### The release tag
 
