@@ -237,10 +237,43 @@ newer**; a source build has no such floor. Rather than failing at load time, `bu
 compares the requirement against the host and stops the build with the remedy.
 
 Prebuilt libraries are published for `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`. Anything else — an Intel Mac, musl,
-a BSD — builds from source, which the next section covers. Intel macOS is absent because
-that runner could not finish a build inside GitHub's six-hour job limit, and GitHub retires
-the image in August 2027 regardless.
+`aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, `aarch64-linux-android` and
+`x86_64-linux-android`. Anything else — an Intel Mac, musl, a BSD — builds from source, which
+a later section covers. Intel macOS is absent because that runner could not finish a build
+inside GitHub's six-hour job limit, and GitHub retires the image in August 2027 regardless.
+
+### Android
+
+Both 64-bit ABIs are published, compiled against bionic at API level 24 — Android 7.0.
+32-bit Android is not supported: MongoDB builds only for 64-bit platforms.
+
+Cargo has to be told which toolchain to use. `cc`, which the `cxx` bridge and
+`link-cplusplus` run, carries no NDK of its own and looks for a `<triple>-clang++` the NDK
+does not ship:
+
+```sh
+ndk=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+export CC_aarch64_linux_android=$ndk/aarch64-linux-android24-clang
+export CXX_aarch64_linux_android=$ndk/aarch64-linux-android24-clang++
+export AR_aarch64_linux_android=$ndk/llvm-ar
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ndk/aarch64-linux-android24-clang
+cargo build --release --target aarch64-linux-android
+```
+
+`cargo-ndk` sets the same variables, if you would rather not.
+
+Ship two files with the application: `libembedded_mongodb_native.so` and the NDK's
+`libc++_shared.so`. The engine links its own C++ runtime statically and exports only the five
+`extern "C"` entry points, but the bridge compiled into the Rust crate uses the NDK's default
+shared runtime, as any other NDK library in the same application does.
+
+Neither Android library gets link-time optimization — those flags are GCC- and `ld.bfd`-
+specific, and the NDK ships neither — so both land near 47 MB against the x86_64 Linux
+build's 34 MB. They do get `--gc-sections`, identical code folding and the version script.
+
+A source build needs `ANDROID_NDK_HOME` or `ANDROID_NDK_ROOT` pointing at an NDK r27 or
+newer, and `EMBEDDED_MONGODB_ANDROID_API` overrides the API level. The NDK's clang
+cross-compiles both ABIs from any host, so no Android hardware is involved in building one.
 
 ### Building the engine from source
 

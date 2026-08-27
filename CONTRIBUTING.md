@@ -138,6 +138,9 @@ what to use for a dry run.
    before anything is published: a per-target size band, an ELF version-need check on Linux
    (no `GLIBCXX`/`CXXABI`/`GCC_`, glibc no higher than 2.39), the Mach-O identity and
    signature on macOS, and a smoke test that loads the library and runs the whole suite.
+   Android is checked against the NDK's own bionic stubs instead — every imported symbol has
+   to resolve at the pinned API level, which is what a shared library never proves at link
+   time — and the x86_64 ABI then runs the suite on an emulator.
 2. **publish** — creates the release, uploads the libraries plus `LICENSE`, `NOTICE` and a
    `THIRD-PARTY-NOTICES` assembled from the actual link, then regenerates
    `embedded-mongodb-sys/prebuilt.rs` and commits it as `github-actions[bot]`.
@@ -239,8 +242,15 @@ why the Linux CI jobs add swap.
 
 ## Supported targets
 
-Prebuilt libraries are published for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
-and `aarch64-apple-darwin`. Anything else builds from source.
+Prebuilt libraries are published for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`aarch64-apple-darwin`, `aarch64-linux-android` and `x86_64-linux-android`. Anything else
+builds from source.
+
+Both Android libraries cross-compile from the x86_64 Linux runner with the NDK, against
+bionic at the API level `embedded-mongodb-sys/build_android.rs` pins. Bazel is told the
+target platform is `@platforms//os:linux` — Android is a Linux kernel with a different libc,
+and every `select()` in the engine and its third-party tree is written against `os:linux` —
+and `patches/0007-build-for-android.patch` covers what bionic and libc++ do not provide.
 
 Intel macOS is absent because that runner never finished a build inside the six-hour job cap,
 and GitHub retires the image in August 2027. Windows is tracked in
