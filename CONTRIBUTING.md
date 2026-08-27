@@ -260,6 +260,10 @@ bionic at the API level `embedded-mongodb-sys/build_android.rs` pins. Bazel is t
 target platform is `@platforms//os:linux` — Android is a Linux kernel with a different libc,
 and every `select()` in the engine and its third-party tree is written against `os:linux` —
 and `patches/0007-build-for-android.patch` covers what bionic and libc++ do not provide.
+`patches/0008-guard-a-null-shared-object-name-on-bionic.patch` covers the other direction:
+bionic hands `dl_iterate_phdr` callbacks a null object name where glibc passes the empty
+string, and the stack-trace machinery took that on trust — a segfault as the library loads
+on Android releases before 9.0, which is below the `minSdk` the AAR advertises.
 
 Intel macOS is absent because that runner never finished a build inside the six-hour job cap,
 and GitHub retires the image in August 2027. Windows is tracked in
