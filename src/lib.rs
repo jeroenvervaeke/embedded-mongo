@@ -5,6 +5,7 @@ mod database;
 mod error;
 mod find;
 mod insert;
+mod repair;
 
 pub use bson;
 pub use client::Client;

@@ -53,6 +53,81 @@ top. Startup uses a 256 MB WiredTiger cache plus a 64 MB spill cache.
 
 </details>
 
+## Repairing a directory an older build damaged
+
+> [!IMPORTANT]
+> Directories written by a build published before this fix carry damaged indexes. Opening one
+> with a current build repairs it automatically, moving rather than deleting any document it has
+> to evict.
+
+**The defect.** Starting the storage engine filled MongoDB's collection catalog and nothing
+else — `DatabaseHolder::openDb` was never called for a database that already existed on disk,
+so every collection loaded from such a directory came back with an empty in-memory index
+catalog. Writes after that reopen went into the record store and into no index at all, `_id_`
+included: a duplicate `_id` was accepted and both copies stayed, and documents written that way
+are invisible to any query answered from an index while a collection scan still returns them.
+Two counts of the same collection could disagree depending on the plan chosen.
+
+**Which directories.** Any directory that was written to *after being reopened*, by a build
+from before this fix. A directory that was only ever written to in the session that created it
+is sound, and so is every directory a current build creates. Only the collections written to
+after a reopen are affected; the rest of the directory is untouched.
+
+**The repair.** `Client::new` checks a directory it did not create for missing index entries and
+runs the engine's own `validate {repair: true}` over any collection that has them. It happens
+once: a directory that has been through the pass carries a `.embedded-mongodb-index-repair`
+marker and is not checked again, and a directory created by a current build is marked without
+being checked at all. Everything it repairs is reported through `tracing` at `WARN`, naming the
+collection, how many index entries were inserted, how many documents moved, and where they went.
+
+The check is a full validation of every collection in the directory, so the first open after
+upgrading is slower than the ones after it. That is the trade: one scan against silently wrong
+query results.
+
+**Evicted duplicates are moved, not deleted.** Where two documents ended up sharing an `_id`,
+the index can only hold one of them. The other is *moved* into
+`local.lost_and_found.<collection UUID>`, and the `WARN` record names that collection. Read it
+back like any other:
+
+```rust
+let evicted = client.database("local").run_command(&doc! {
+    "listCollections": 1,
+    "filter": { "name": { "$regex": "^lost_and_found\\." } },
+})?;
+```
+
+**One thing the repair can delete.** `validate {repair: true}` is the engine's general-purpose
+repair, not one written for this defect alone. If it meets a record whose BSON cannot be read —
+unrelated corruption, not anything this defect produces — it removes that record, and there is no
+lost and found for those. The pass reports any such deletion in a `WARN` of its own, naming the
+collection and the count. To look before anything is touched, set the variable below for one
+open and run `validate` without `repair` yourself.
+
+**Skipping it.** Set `EMBEDDED_MONGODB_SKIP_INDEX_REPAIR` to `1`, `true`, `yes` or `on` to leave
+the check out. Any other value leaves it on — `no` and `off` included, deliberately, so that a
+value nobody meant as yes cannot quietly switch off a repair. Skipping does not write the marker,
+so it suppresses the pass rather than cancelling it: the next open without the variable set still
+checks the directory.
+
+**Forcing it.** Delete `.embedded-mongodb-index-repair` from the directory and the next open
+checks it again. Worth knowing if a directory has been back to an older build since — the marker
+records that a check happened, not which engine wrote the data afterwards.
+
+**Doing it by hand.** The pass runs nothing you cannot run yourself. Per collection:
+
+```rust
+let report = client.database("shop").run_command(&doc! { "validate": "orders" })?;
+// report.valid, report.errors, report.missingIndexEntries
+
+let repaired = client.database("shop").run_command(&doc! { "validate": "orders", "repair": true })?;
+// repaired.numInsertedMissingIndexEntries, repaired.numDocumentsMovedToLostAndFound
+```
+
+`validate {repair: true}` is idempotent, so running it against a sound collection changes
+nothing. Note that its reply reports the state it *found*: a collection that is sound afterwards
+can still come back with `valid: false` in the same reply that says `repaired: true`. Validate
+again to see the result.
+
 ## Quick start
 
 Open a directory, insert a document, and query it back:
@@ -154,6 +229,9 @@ The embedded deployment model creates a path toward:
 - **Observability** — MongoDB-to-`tracing` severity mapping.
 - **Engine identity** — `buildInfo`, the `serverStatus` section and the `embeddedMongodb`
   command all report the embedded build and agree with one another.
+- **Index repair** — a data directory a pre-fix engine damaged is checked in as a fixture, and the
+  repair pass is held to repairing it, to running once, to leaving a healthy directory alone, and
+  to moving rather than deleting a duplicate.
 
 One end-to-end integration test covers the operations demonstrated by all three examples.
 
