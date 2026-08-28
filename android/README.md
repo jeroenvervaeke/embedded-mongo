@@ -223,10 +223,14 @@ wanted. The overload without a `Context` cannot ask, so prefer the one with it.
 
 The measurement is `StorageManager.getAllocatableBytes`, which counts the cached data Android will
 delete for the application — `allocateBytes` reclaims that space rather than merely counting it. It
-answers for the application rather than for the volume, so what it is held to (256 MB) is lower
+answers for the application rather than for the volume, so what it is held to (256 MiB) is lower
 than the engine's own floor; this check is there to catch a device with nothing left, not to
 second-guess the engine. A `StorageOptions.freeDiskFloor` below that lowers this check to match,
-since an application that named a floor has already said how much room is enough for it.
+since an application that named a floor has already said how much room is enough for it — but
+never below what opening itself costs, which is the journal file allocated in full (8 MiB by
+default, twice that with a spare kept ready) plus a megabyte for everything else a fresh
+directory holds. The floor governs index builds, not whether WiredTiger can create its first
+journal file.
 
 ## Building this module
 

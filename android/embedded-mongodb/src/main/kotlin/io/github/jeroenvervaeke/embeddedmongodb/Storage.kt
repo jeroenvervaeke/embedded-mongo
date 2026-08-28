@@ -16,8 +16,8 @@ class InsufficientStorageException internal constructor(
     val allocatableBytes: Long,
     val requiredBytes: Long,
 ) : Exception(
-    "the embedded MongoDB engine needs ${requiredBytes / BYTES_PER_MEBIBYTE} MB to open a " +
-        "database, and this volume can give it ${allocatableBytes / BYTES_PER_MEBIBYTE} MB",
+    "the embedded MongoDB engine needs ${requiredBytes / BYTES_PER_MEBIBYTE} MiB to open a " +
+        "database, and this volume can give it ${allocatableBytes / BYTES_PER_MEBIBYTE} MiB",
 )
 
 /**
@@ -37,28 +37,55 @@ class InsufficientStorageException internal constructor(
  * Advisory by design: a platform that will not answer leaves the decision to the engine rather
  * than blocking an open that might have worked.
  */
-internal fun checkStorage(context: Context, directory: File, floor: FreeDiskFloor?) {
+internal fun checkStorage(context: Context, directory: File, options: StorageOptions) {
     val allocatable = allocatableBytes(context, directory) ?: return
-    checkAllocatable(allocatable, floor)
+    checkAllocatable(allocatable, options)
 }
 
-internal fun checkAllocatable(allocatableBytes: Long, floor: FreeDiskFloor?) {
-    val required = requiredFreeBytes(floor)
+internal fun checkAllocatable(allocatableBytes: Long, options: StorageOptions) {
+    val required = requiredFreeBytes(options)
     if (allocatableBytes >= required) return
     throw InsufficientStorageException(allocatableBytes, required)
 }
 
 /**
- * Room for the engine to work in, lowered to whatever floor the caller named.
+ * Room for the engine to work in, lowered to whatever floor the caller named but never below
+ * what the engine needs to open at all.
  *
  * An application that sets [StorageOptions.freeDiskFloor] to 64 MiB has said that 64 MiB of
  * headroom is enough for the work it is about to do, and refusing to open it on 200 MB would
- * take back the one knob that makes a nearly-full device usable. It only ever lowers: raising
- * the engine's floor says nothing about how much the *platform* will hand this application,
- * which is the smaller number this check is against and the reason it has a default of its own.
+ * take back the one knob that makes a nearly-full device usable. The floor governs index builds
+ * and spilling queries, though, not whether WiredTiger can create its first journal file — so a
+ * floor lower than [bytesToOpen] must not drag this check down with it, or the check would wave
+ * through exactly the volume it exists to catch.
+ *
+ * It only ever lowers past the default: raising the engine's floor says nothing about how much
+ * the *platform* will hand this application, which is the smaller number this check is against
+ * and the reason it has a default of its own.
  */
-internal fun requiredFreeBytes(floor: FreeDiskFloor?): Long =
-    minOf(DEFAULT_REQUIRED_FREE_BYTES, floor?.bytes ?: DEFAULT_REQUIRED_FREE_BYTES)
+internal fun requiredFreeBytes(options: StorageOptions): Long = maxOf(
+    bytesToOpen(options),
+    minOf(DEFAULT_REQUIRED_FREE_BYTES, options.freeDiskFloor?.bytes ?: DEFAULT_REQUIRED_FREE_BYTES),
+)
+
+/**
+ * What the engine must be able to write before it can answer anything.
+ *
+ * WiredTiger allocates a journal file in full the moment it creates it, and keeps a second one
+ * ready when a spare is asked for, so the journal is nearly the whole of it. Everything else a
+ * fresh directory holds — the catalog, the history store, the turtle file, the size storer and
+ * the scratch database for spilling — measured about 130 KiB together, which [OPEN_MARGIN_BYTES]
+ * covers several times over.
+ *
+ * The 8 MiB is the engine's own default restated, which is normally something this side refuses
+ * to do. It is unavoidable here: predicting the cost of an open before making it is the one job
+ * that cannot ask the engine what its default is.
+ */
+private fun bytesToOpen(options: StorageOptions): Long {
+    val kibibytes = options.journalFileSize?.kibibytes ?: DEFAULT_JOURNAL_KIBIBYTES
+    val files = if (options.journalPreallocation == JournalPreallocation.ENABLED) 2 else 1
+    return kibibytes.toLong() * 1024 * files + OPEN_MARGIN_BYTES
+}
 
 /**
  * What the volume holding [directory] could give this application, or `null` when the platform
@@ -92,3 +119,9 @@ internal fun allocatableBytes(context: Context, directory: File): Long? {
  * catch the volume that has nothing left, before the engine hits it and aborts the process.
  */
 private const val DEFAULT_REQUIRED_FREE_BYTES = 256L * BYTES_PER_MEBIBYTE
+
+/** The engine's own default journal file size; see [bytesToOpen] for why it is repeated here. */
+private const val DEFAULT_JOURNAL_KIBIBYTES = 8 * 1024
+
+/** Room for everything a fresh directory holds besides its journal, with room to spare. */
+private const val OPEN_MARGIN_BYTES = BYTES_PER_MEBIBYTE

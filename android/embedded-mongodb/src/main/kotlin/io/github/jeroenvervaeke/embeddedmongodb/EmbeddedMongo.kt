@@ -5,7 +5,6 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -149,7 +148,7 @@ class EmbeddedMongo internal constructor(
             context: Context,
             directory: File,
             options: StorageOptions = StorageOptions(),
-        ): EmbeddedMongo = withContext(Dispatchers.IO) { openBlocking(context, directory, options) }
+        ): EmbeddedMongo = openedOrClosed { openBlocking(context, directory, options) }
 
         /**
          * Opens, creating it if it does not exist, the database stored in [directory], sized by
@@ -161,7 +160,7 @@ class EmbeddedMongo internal constructor(
          */
         @JvmOverloads
         suspend fun open(directory: File, options: StorageOptions = StorageOptions()): EmbeddedMongo =
-            withContext(Dispatchers.IO) { openBlocking(directory, options) }
+            openedOrClosed { openBlocking(directory, options) }
 
         /**
          * Opens the database stored in [directory] on the calling thread, having first checked
@@ -186,7 +185,7 @@ class EmbeddedMongo internal constructor(
         ): EmbeddedMongo {
             MainThreadGuard.Android.reject(OPENING)
             prepare(directory)
-            checkStorage(context, directory, options.freeDiskFloor)
+            checkStorage(context, directory, options)
             return opened(directory, options)
         }
 
