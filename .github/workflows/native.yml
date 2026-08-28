@@ -514,7 +514,12 @@ jobs:
             echo "--- $name"
             # adb shell exits 0 whatever the command did, so carry the status out by hand.
             # tr: the device's line endings are CRLF, which no anchored pattern would match.
-            adb shell "cd $remote && LD_LIBRARY_PATH=$remote TMPDIR=$remote ./$name \
+            # EMBEDDED_MONGODB_PROBE_TMPDIR as well as TMPDIR: the durability probes take
+            # their data directories from CARGO_TARGET_TMPDIR, which cargo bakes in at compile
+            # time as a path on the *build host*. On the device that path is not writable, so
+            # every probe fails on it. This override is why the helper has one.
+            adb shell "cd $remote && LD_LIBRARY_PATH=$remote TMPDIR=$remote \
+              EMBEDDED_MONGODB_PROBE_TMPDIR=$remote/probe ./$name \
               --test-threads=1; echo exit=\$?" | tr -d '\r' | tee output.txt
             grep -qx 'exit=0' output.txt || { echo "$name failed on the device" >&2; exit 1; }
           done
