@@ -26,6 +26,10 @@ import org.bson.Document
  * database.documents("shop", Document("find", "orders")).collect(::render)
  * ```
  *
+ * How much room the engine may take is [StorageOptions], named at [open]. The defaults are sized
+ * for a phone, so an application that names nothing is not left with a server's appetite; the one
+ * worth reading before leaning on it is [FreeDiskFloor].
+ *
  * An instance is meant to live as long as the data it serves; [close] it from a background thread
  * when it does not. **One instance per process**: the engine refuses a second runtime, so a second
  * [open] before the first is closed throws [EmbeddedMongoException]. An application that needs
@@ -127,55 +131,79 @@ class EmbeddedMongo internal constructor(
 
     private fun checkOpen() = check(!closed) { "the embedded MongoDB database is closed" }
 
+    // `@JvmOverloads` on all four: `options` arrived as a defaulted parameter, which changes the
+    // JVM signature of the function that was there before it. Without the annotation an
+    // application compiled against an earlier build of this library would fail with
+    // NoSuchMethodError rather than pick up the new default, which is the same promise the
+    // native bridge keeps by adding an entry point rather than editing one.
     companion object {
         /**
-         * Opens, creating it if it does not exist, the database stored in [directory], having
-         * first checked that the volume can give the engine room to work.
+         * Opens, creating it if it does not exist, the database stored in [directory], sized by
+         * [options] and having first checked that the volume can give the engine room to work.
          *
          * This is the overload to prefer on Android: running out of space aborts the process
          * rather than failing a command, and [context] is what makes the room measurable.
          */
-        suspend fun open(context: Context, directory: File): EmbeddedMongo =
-            withContext(Dispatchers.IO) { openBlocking(context, directory) }
+        @JvmOverloads
+        suspend fun open(
+            context: Context,
+            directory: File,
+            options: StorageOptions = StorageOptions(),
+        ): EmbeddedMongo = withContext(Dispatchers.IO) { openBlocking(context, directory, options) }
 
         /**
-         * Opens, creating it if it does not exist, the database stored in [directory].
+         * Opens, creating it if it does not exist, the database stored in [directory], sized by
+         * [options].
          *
          * Prefer the overload taking a [Context]: without one there is no way to ask the platform
          * how much room the volume can give, and the first sign of a full one is the process
          * being killed.
          */
-        suspend fun open(directory: File): EmbeddedMongo =
-            withContext(Dispatchers.IO) { openBlocking(directory) }
+        @JvmOverloads
+        suspend fun open(directory: File, options: StorageOptions = StorageOptions()): EmbeddedMongo =
+            withContext(Dispatchers.IO) { openBlocking(directory, options) }
 
         /**
          * Opens the database stored in [directory] on the calling thread, having first checked
          * that the volume can give the engine room to work.
          *
+         * A [StorageOptions.freeDiskFloor] lowers what that check insists on as well as what the
+         * engine does, since an application that named a floor has already said how much room is
+         * enough for it.
+         *
          * @throws IllegalStateException if called on the main thread.
+         * @throws IllegalArgumentException if [directory] exists and is not a directory.
          * @throws InsufficientStorageException if the volume cannot give the engine the space it
          *   needs.
-         * @throws EmbeddedMongoException if the engine cannot open the directory, a second
-         *   database already open in this process included.
+         * @throws EmbeddedMongoException if the engine cannot open the directory or will not take
+         *   [options], a second database already open in this process included.
          */
-        fun openBlocking(context: Context, directory: File): EmbeddedMongo {
+        @JvmOverloads
+        fun openBlocking(
+            context: Context,
+            directory: File,
+            options: StorageOptions = StorageOptions(),
+        ): EmbeddedMongo {
             MainThreadGuard.Android.reject(OPENING)
             prepare(directory)
-            checkStorage(context, directory)
-            return opened(directory)
+            checkStorage(context, directory, options.freeDiskFloor)
+            return opened(directory, options)
         }
 
         /**
-         * Opens the database stored in [directory] on the calling thread.
+         * Opens the database stored in [directory] on the calling thread, sized by [options].
          *
          * @throws IllegalStateException if called on the main thread.
-         * @throws EmbeddedMongoException if the engine cannot open the directory, a second
-         *   database already open in this process or a volume with no room for it included.
+         * @throws IllegalArgumentException if [directory] exists and is not a directory.
+         * @throws EmbeddedMongoException if the engine cannot open the directory or will not take
+         *   [options], a second database already open in this process or a volume with no room
+         *   for it included.
          */
-        fun openBlocking(directory: File): EmbeddedMongo {
+        @JvmOverloads
+        fun openBlocking(directory: File, options: StorageOptions = StorageOptions()): EmbeddedMongo {
             MainThreadGuard.Android.reject(OPENING)
             prepare(directory)
-            return opened(directory)
+            return opened(directory, options)
         }
 
         private const val OPENING = "Opening an embedded MongoDB database"
@@ -187,7 +215,15 @@ class EmbeddedMongo internal constructor(
             }
         }
 
-        private fun opened(directory: File) =
-            EmbeddedMongo(NativeEngine.open(directory), MainThreadGuard.Android)
+        /**
+         * The free-disk floor is applied here rather than inside the engine because it is a
+         * server parameter, which only exists once the engine is running. Nothing between the
+         * open and this needs it: the index repair pass the open may run builds its indexes
+         * through `validate`, which does not consult the floor — only `createIndexes` does, and
+         * the caller cannot have run one yet.
+         */
+        private fun opened(directory: File, options: StorageOptions) =
+            EmbeddedMongo(NativeEngine.open(directory, options), MainThreadGuard.Android)
+                .withFreeDiskFloor(options.freeDiskFloor)
     }
 }

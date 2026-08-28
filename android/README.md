@@ -159,22 +159,74 @@ few hundred writes — and an insert that implicitly created a collection can ta
 with it. So a write command that names no `writeConcern` is sent with `{w: 1, j: true}`; a caller
 who wants the faster, lossy behaviour puts their own `writeConcern` in the command.
 
-Two limits of the engine are worth knowing before an application leans on them, both being worked
-on elsewhere in this repository:
+## Storage limits
 
-- Secondary indexes do not survive reopening the database — queries fall back to a collection scan,
-  and `createIndexes` on a reopened database ends the process rather than returning an error.
-- `listCollections` reports nothing on a reopened database, so it cannot be used to decide anything.
+The defaults are already sized for a phone rather than for a server, and an application that names
+nothing gets them: a directory holding 2.25 MiB of documents and indexes occupies 10.25 MiB here,
+against 202 MiB at mongod's journal settings, nearly all of which is journal files allocated in
+full whether or not anything is written to them. What is left to name is what only the application
+can know.
 
-A volume with a few hundred megabytes free is a precondition, not a suggestion: the engine refuses
-to open below roughly 500 MB, and a volume that fills up under a running engine ends the process
-outright rather than failing a command. `EmbeddedMongo.open(context, directory)` checks first and
-throws `InsufficientStorageException`, which carries how much room there is and how much is
-wanted; the overload without a `Context` cannot ask, so prefer the one with it. The measurement is
-`StorageManager.getAllocatableBytes`, which counts the cached data Android will delete for the
-application — `allocateBytes` will reclaim it rather than merely count it. It answers for the
-application rather than for the volume, so the floor it is held to is lower than the engine's own:
-this check is there to catch a device with nothing left, not to second-guess the engine.
+| Limit | Default | Named by |
+| --- | --- | --- |
+| WiredTiger cache | 256 MB | `StorageOptions.cacheSize` |
+| Journal file size | 8 MiB (mongod: 100 MB) | `StorageOptions.journalFileSize` |
+| Journal pre-allocation | off (mongod: on) | `StorageOptions.journalPreallocation` |
+| Free disk to start an index build or spill a query | 500 MB, as mongod | `StorageOptions.freeDiskFloor`, and `setFreeDiskFloor` at any time |
+
+```kotlin
+// Inside a coroutine, as with every other overload of open.
+val database = EmbeddedMongo.open(
+    context,
+    File(context.filesDir, "shop"),
+    StorageOptions(
+        cacheSize = CacheSize.ofMebibytes(32),
+        freeDiskFloor = FreeDiskFloor.ofMebibytes(64),
+    ),
+)
+```
+
+Every limit left `null` keeps the engine's own default, so `StorageOptions()` opens exactly the way
+`open(context, directory)` does. Each one is a type rather than a number, and each is checked where
+it is written: `CacheSize.ofMebibytes(0)` throws at that line rather than failing an open later, and
+a `CacheSize` cannot be handed to the journal.
+
+The first three are read once while WiredTiger is opening and cannot be changed afterwards. The
+free-disk floor is a pair of server parameters, so it can also be moved on a database that is
+already open — `setFreeDiskFloor` and `setFreeDiskFloorBlocking`, with `freeDiskFloors` reporting
+what the engine is running with. Raising it before a large index build and dropping it afterwards
+is a reasonable thing to do.
+
+### The free-disk floor, and what lowering it costs
+
+MongoDB will not start an index build, or spill a query to disk, with less than 500 MB free. That
+is sized for a server. A phone near its limit does not have 500 MB free at all, so on such a device
+an application that can open and read its database still cannot seed one: `createIndexes` fails
+with `OutOfDiskSpace`. Lowering the floor is what makes that device work, and it is the reason this
+knob is reachable from Kotlin at all.
+
+It is also the only warning an application gets. The floor is a pre-flight check and nothing more:
+it refuses a build that would *start* with too little room, and nothing stops one that runs out
+part-way. This engine runs no `DiskSpaceMonitor` — the thread mongod uses to abort builds as a disk
+fills is started from `mongod_main`, which this engine does not use — and WiredTiger answers a
+genuinely full disk with `WT_PANIC`, which MongoDB answers with `fassert`. That aborts the
+application process: no exception, no return value, nothing to catch.
+
+So lowering the floor trades a clean refusal the application can report to the user for a crash it
+cannot. Lower it to what the work about to be done actually needs, not to what will fit.
+
+### Before the engine is opened at all
+
+`EmbeddedMongo.open(context, directory)` checks that the volume can give the engine room to work
+and throws `InsufficientStorageException`, which carries how much room there is and how much is
+wanted. The overload without a `Context` cannot ask, so prefer the one with it.
+
+The measurement is `StorageManager.getAllocatableBytes`, which counts the cached data Android will
+delete for the application — `allocateBytes` reclaims that space rather than merely counting it. It
+answers for the application rather than for the volume, so what it is held to (256 MB) is lower
+than the engine's own floor; this check is there to catch a device with nothing left, not to
+second-guess the engine. A `StorageOptions.freeDiskFloor` below that lowers this check to match,
+since an application that named a floor has already said how much room is enough for it.
 
 ## Building this module
 

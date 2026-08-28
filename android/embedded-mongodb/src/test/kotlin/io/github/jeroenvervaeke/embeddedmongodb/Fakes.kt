@@ -26,6 +26,27 @@ internal class FakeEngine(private val reply: (Document) -> Document) : Engine {
     }
 }
 
+/** A [BridgeOpener] that records which entry point it was sent to, and with what. */
+internal class FakeOpener(private val handle: Long = 1) : BridgeOpener {
+    var openedPath: String? = null
+        private set
+    var openedWithOptionsPath: String? = null
+        private set
+    var slots: LongArray? = null
+        private set
+
+    override fun open(path: String): Long {
+        openedPath = path
+        return handle
+    }
+
+    override fun openWithOptions(path: String, options: LongArray): Long {
+        openedWithOptionsPath = path
+        slots = options
+        return handle
+    }
+}
+
 /** A [CommandRunner] that answers with prepared replies and records what it was asked. */
 internal class FakeRunner(replies: List<Document>) : CommandRunner {
     private val replies = replies.toMutableList()

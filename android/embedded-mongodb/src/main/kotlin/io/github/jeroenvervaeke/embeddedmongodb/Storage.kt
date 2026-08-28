@@ -16,12 +16,13 @@ class InsufficientStorageException internal constructor(
     val allocatableBytes: Long,
     val requiredBytes: Long,
 ) : Exception(
-    "the embedded MongoDB engine needs ${requiredBytes / BYTES_PER_MEGABYTE} MB to open a " +
-        "database, and this volume can give it ${allocatableBytes / BYTES_PER_MEGABYTE} MB",
+    "the embedded MongoDB engine needs ${requiredBytes / BYTES_PER_MEBIBYTE} MB to open a " +
+        "database, and this volume can give it ${allocatableBytes / BYTES_PER_MEBIBYTE} MB",
 )
 
 /**
- * Refuses to open a database on a volume without the room the engine needs.
+ * Refuses to open a database on a volume without the room the engine needs, or without the
+ * room [floor] asks for where a caller named one.
  *
  * This is the one precondition worth checking before calling into the engine, because running out
  * of space is not an error it returns: WiredTiger panics and the process is aborted, past the
@@ -36,15 +37,28 @@ class InsufficientStorageException internal constructor(
  * Advisory by design: a platform that will not answer leaves the decision to the engine rather
  * than blocking an open that might have worked.
  */
-internal fun checkStorage(context: Context, directory: File) {
+internal fun checkStorage(context: Context, directory: File, floor: FreeDiskFloor?) {
     val allocatable = allocatableBytes(context, directory) ?: return
-    checkAllocatable(allocatable)
+    checkAllocatable(allocatable, floor)
 }
 
-internal fun checkAllocatable(allocatableBytes: Long) {
-    if (allocatableBytes >= REQUIRED_FREE_BYTES) return
-    throw InsufficientStorageException(allocatableBytes, REQUIRED_FREE_BYTES)
+internal fun checkAllocatable(allocatableBytes: Long, floor: FreeDiskFloor?) {
+    val required = requiredFreeBytes(floor)
+    if (allocatableBytes >= required) return
+    throw InsufficientStorageException(allocatableBytes, required)
 }
+
+/**
+ * Room for the engine to work in, lowered to whatever floor the caller named.
+ *
+ * An application that sets [StorageOptions.freeDiskFloor] to 64 MiB has said that 64 MiB of
+ * headroom is enough for the work it is about to do, and refusing to open it on 200 MB would
+ * take back the one knob that makes a nearly-full device usable. It only ever lowers: raising
+ * the engine's floor says nothing about how much the *platform* will hand this application,
+ * which is the smaller number this check is against and the reason it has a default of its own.
+ */
+internal fun requiredFreeBytes(floor: FreeDiskFloor?): Long =
+    minOf(DEFAULT_REQUIRED_FREE_BYTES, floor?.bytes ?: DEFAULT_REQUIRED_FREE_BYTES)
 
 /**
  * What the volume holding [directory] could give this application, or `null` when the platform
@@ -66,11 +80,9 @@ internal fun allocatableBytes(context: Context, directory: File): Long? {
     }
 }
 
-private const val BYTES_PER_MEGABYTE = 1024L * 1024L
-
 /**
- * Room for the engine to work in, and deliberately below the roughly 500 MB of free space the
- * engine itself insists on before it will open a database.
+ * Room for the engine to work in when the caller named no floor of their own, and deliberately
+ * below the 500 MB of free space the engine itself insists on before it will build an index.
  *
  * The two numbers measure different things and cannot be the same. The engine asks the filesystem
  * how much space is free; `getAllocatableBytes` answers how much *this application* could be given,
@@ -79,4 +91,4 @@ private const val BYTES_PER_MEGABYTE = 1024L * 1024L
  * engine opens without complaint, which is the failure this check must not have: its job is to
  * catch the volume that has nothing left, before the engine hits it and aborts the process.
  */
-private const val REQUIRED_FREE_BYTES = 256L * BYTES_PER_MEGABYTE
+private const val DEFAULT_REQUIRED_FREE_BYTES = 256L * BYTES_PER_MEBIBYTE
