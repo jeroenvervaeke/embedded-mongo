@@ -30,14 +30,18 @@ pub fn bridge_libraries() -> Vec<PathBuf> {
 
 /// When the code behind these libraries was last edited.
 ///
-/// Covers the sys crate as well: the bridge and the engine linkage it owns are compiled into
-/// both libraries, so an edit there dates them just as surely as an edit here does.
+/// Covers both crates the bridge links: the sys crate owns the engine linkage, and the safe
+/// crate at the workspace root owns the client the bridge opens through -- and with it the
+/// one-time index repair pass that runs on the way in. An edit to either is compiled into both
+/// libraries, so it dates them just as surely as an edit here does.
 fn newest_source() -> Option<SystemTime> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = crate_root.parent()?.to_path_buf();
     [
         crate_root.join("src"),
         crate_root.join("Cargo.toml"),
+        workspace.join("src"),
+        workspace.join("Cargo.toml"),
         workspace.join("embedded-mongodb-sys"),
     ]
     .iter()

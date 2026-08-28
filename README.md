@@ -80,6 +80,12 @@ marker and is not checked again, and a directory created by a current build is m
 being checked at all. Everything it repairs is reported through `tracing` at `WARN`, naming the
 collection, how many index entries were inserted, how many documents moved, and where they went.
 
+Every binding opens through that same `Client::new` — `MongoClient("mongodb_embedded://…")` in
+Python and `NativeBridge.open` on Android both go through it — so the pass, the marker and the
+skip variable below behave identically whichever language opens the directory. Neither binding
+installs a `tracing` subscriber, though, so the `WARN` records go nowhere unless the host
+application has one: there, the marker and the repaired collections are what to look at.
+
 The check is a full validation of every collection in the directory, so the first open after
 upgrading is slower than the ones after it. That is the trade: one scan against silently wrong
 query results.

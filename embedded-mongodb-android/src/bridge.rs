@@ -1,4 +1,4 @@
-use embedded_mongodb_sys::Client;
+use embedded_mongodb::Client;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::jlong;
 use jni::{Env, EnvUnowned};
@@ -59,9 +59,13 @@ pub extern "system" fn Java_io_github_jeroenvervaeke_embeddedmongodb_NativeBridg
         .resolve::<ThrowEmbeddedMongoException>()
 }
 
+/// Opens through the safe crate rather than the raw FFI client, which is what runs the
+/// one-time index repair pass over a directory an older build damaged. An Android application
+/// pointed at a directory some earlier build wrote is the likeliest holder of that damage, so
+/// this is the one call site where reaching straight for the FFI would cost the most.
 fn open(env: &mut Env<'_>, path: &JString<'_>) -> Result<jlong> {
     let path = read_string(env, path, "path")?;
-    let client = Client::open(&path)?;
+    let client = Client::new(&path)?;
     Ok(registry().insert(client)?.get())
 }
 

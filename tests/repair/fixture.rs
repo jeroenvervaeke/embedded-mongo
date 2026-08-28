@@ -31,7 +31,8 @@ use std::{
 };
 use tempfile::TempDir;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/damaged-reopen");
+/// Where the fixture lives, relative to the workspace root.
+const FIXTURE: &str = "tests/fixtures/damaged-reopen";
 
 /// How many files the fixture is made of. Asserted on unpacking, so a fixture that arrived
 /// half-committed fails as a fixture problem instead of as an unexplained engine error.
@@ -58,9 +59,10 @@ pub fn directory() -> TempDir {
 
 /// Unpacks the damaged directory into `path`, which must not exist yet.
 pub fn unpack_damaged(path: &Path) {
+    let fixture = fixture();
     fs::create_dir_all(path).unwrap();
     let mut unpacked = 0;
-    for entry in fs::read_dir(FIXTURE).unwrap() {
+    for entry in fs::read_dir(&fixture).unwrap() {
         let entry = entry.unwrap();
         let name = entry.file_name().into_string().unwrap();
         let Some(name) = name.strip_suffix(".gz") else {
@@ -72,8 +74,10 @@ pub fn unpack_damaged(path: &Path) {
         unpacked += 1;
     }
     assert_eq!(
-        unpacked, FIXTURE_FILES,
-        "unpacked {unpacked} files from {FIXTURE}, expected {FIXTURE_FILES}"
+        unpacked,
+        FIXTURE_FILES,
+        "unpacked {unpacked} files from {}, expected {FIXTURE_FILES}",
+        fixture.display()
     );
 }
 
@@ -84,4 +88,27 @@ pub const MARKER: &str = ".embedded-mongodb-index-repair";
 
 pub fn marker_exists(path: &Path) -> bool {
     path.join(MARKER).is_file()
+}
+
+/// The committed fixture, found by walking up from whichever crate is compiling this file.
+///
+/// Not `CARGO_MANIFEST_DIR` joined to the relative path: `embedded-mongodb-android/tests`
+/// includes this same file to prove the pass reaches the JNI bridge, and there the manifest
+/// directory is one level below the workspace root the fixture hangs off. Sharing the file is
+/// the point -- a second copy of the unpacking would drift from the fixture it unpacks.
+fn fixture() -> PathBuf {
+    let mut directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = directory.join(FIXTURE);
+        if candidate.is_dir() {
+            return candidate;
+        }
+        let Some(parent) = directory.parent() else {
+            panic!(
+                "no {FIXTURE} in {} or any directory above it",
+                env!("CARGO_MANIFEST_DIR")
+            );
+        };
+        directory = parent;
+    }
 }

@@ -11,14 +11,24 @@ use super::libraries::library_path;
 /// is reported rather than waited on.
 const PATIENCE: Duration = Duration::from_secs(300);
 
+/// Which data directory a harness works in.
+pub enum Database<'a> {
+    /// The harness creates one of its own under `java.io.tmpdir`.
+    Own,
+    /// One the test unpacked before the JVM started, named to the harness as
+    /// `embedded.mongodb.database`.
+    Existing(&'a Path),
+}
+
 /// Compiles the Java fixtures and runs one harness class against one native library,
 /// returning everything it printed.
-pub fn run_harness(class: &str, library: &Path, classes: &str) -> String {
+pub fn run_harness(class: &str, library: &Path, classes: &str, database: Database<'_>) -> String {
     let classes = compile(classes);
     let scratch = scratch_dir(class);
     let out_log = scratch.join("stdout.log");
     let err_log = scratch.join("stderr.log");
-    let mut child = Command::new(jdk_tool("java"))
+    let mut command = Command::new(jdk_tool("java"));
+    command
         .arg("-Xcheck:jni")
         .arg("-cp")
         .arg(&classes)
@@ -28,7 +38,11 @@ pub fn run_harness(class: &str, library: &Path, classes: &str) -> String {
         // journal for every data directory it opens, however few documents go in -- so a JVM
         // killed before the harness deletes its tree would leave that in RAM.
         // `CARGO_TARGET_TMPDIR` is under `target`: real storage, wiped by `cargo clean`.
-        .arg(format!("-Djava.io.tmpdir={}", scratch.display()))
+        .arg(format!("-Djava.io.tmpdir={}", scratch.display()));
+    if let Database::Existing(path) = database {
+        command.arg(format!("-Dembedded.mongodb.database={}", path.display()));
+    }
+    let mut child = command
         .arg(format!("io.github.jeroenvervaeke.embeddedmongodb.{class}"))
         .env("LD_LIBRARY_PATH", library_path())
         // Redirected to files rather than piped: nothing then has to drain a pipe while the
