@@ -8,10 +8,23 @@
 //!
 //! final class NativeBridge {
 //!     static native long open(String path);
+//!     static native long openWithOptions(String path, long[] options);
 //!     static native byte[] command(long handle, String database, byte[] command);
 //!     static native void close(long handle);
 //! }
 //! ```
+//!
+//! Those four names and signatures are the contract. `openWithOptions` was added to it rather
+//! than folded into `open`, and it takes a self-describing array rather than one parameter per
+//! limit, so that the contract can grow another storage limit without any of the four
+//! changing: [`options`] has the whole argument. It is the same promise the C ABI makes with
+//! `embedded_mongodb_open_with_options` and its size-prefixed struct, kept in the shape JNI
+//! can express.
+//!
+//! Only the limits WiredTiger reads while it is being opened need a native entry point at all.
+//! The free-disk floors are server parameters a `setParameter` command sets on a running
+//! engine, so the Kotlin side reaches them over `command` and this library knows nothing about
+//! them.
 //!
 //! Every failure arrives as
 //! `io.github.jeroenvervaeke.embeddedmongodb.EmbeddedMongoException(String message, int code)`,
@@ -27,6 +40,7 @@ mod bridge;
 mod error;
 mod handle;
 mod jvm;
+pub mod options;
 mod registry;
 
 pub use error::{BridgeError, ErrorCode, Result};

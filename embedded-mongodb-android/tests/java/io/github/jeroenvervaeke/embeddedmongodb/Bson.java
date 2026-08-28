@@ -24,6 +24,10 @@ final class Bson {
         return element((byte) 0x10, name, allocate(4).putInt(value).array());
     }
 
+    static byte[] int64(String name, long value) {
+        return element((byte) 0x12, name, allocate(8).putLong(value).array());
+    }
+
     static byte[] string(String name, String value) {
         byte[] utf8 = value.getBytes(StandardCharsets.UTF_8);
         ByteBuffer buffer = allocate(4 + utf8.length + 1);
@@ -55,6 +59,41 @@ final class Bson {
 
     /** Reads a top-level number, whatever numeric type it arrived as. */
     static double number(byte[] document, String name) {
+        Field field = locate(document, name);
+        switch (field.type()) {
+            case 0x01:
+                return field.buffer().getDouble();
+            case 0x10:
+                return field.buffer().getInt();
+            case 0x12:
+                return field.buffer().getLong();
+            default:
+                throw new IllegalArgumentException(name + " is not a number");
+        }
+    }
+
+    /**
+     * Reads a top-level sub-document out as a document of its own, so that a nested field is
+     * one more call rather than a second parser. {@code serverStatus} is three deep.
+     */
+    static byte[] subDocumentOf(byte[] document, String name) {
+        Field field = locate(document, name);
+        if (field.type() != 0x03) {
+            throw new IllegalArgumentException(name + " is not a document");
+        }
+        int start = field.buffer().position();
+        int length = field.buffer().getInt(start);
+        byte[] nested = new byte[length];
+        System.arraycopy(document, start, nested, 0, length);
+        return nested;
+    }
+
+    private Bson() {}
+
+    /** One field of a document: its type, and a buffer positioned at its value. */
+    private record Field(byte type, ByteBuffer buffer) {}
+
+    private static Field locate(byte[] document, String name) {
         ByteBuffer buffer = ByteBuffer.wrap(document).order(ByteOrder.LITTLE_ENDIAN);
         int declared = buffer.getInt();
         if (declared != document.length) {
@@ -67,35 +106,12 @@ final class Bson {
                 throw new IllegalArgumentException("no field named " + name + " in the reply");
             }
             String field = cstring(buffer);
-            switch (type) {
-                case 0x01:
-                    double asDouble = buffer.getDouble();
-                    if (field.equals(name)) {
-                        return asDouble;
-                    }
-                    break;
-                case 0x10:
-                    int asInt = buffer.getInt();
-                    if (field.equals(name)) {
-                        return asInt;
-                    }
-                    break;
-                case 0x12:
-                    long asLong = buffer.getLong();
-                    if (field.equals(name)) {
-                        return asLong;
-                    }
-                    break;
-                default:
-                    if (field.equals(name)) {
-                        throw new IllegalArgumentException(name + " is not a number");
-                    }
-                    skip(buffer, type);
+            if (field.equals(name)) {
+                return new Field(type, buffer);
             }
+            skip(buffer, type);
         }
     }
-
-    private Bson() {}
 
     private static byte[] element(byte type, String name, byte[] value) {
         byte[] utf8 = name.getBytes(StandardCharsets.UTF_8);
@@ -122,6 +138,15 @@ final class Bson {
 
     private static void skip(ByteBuffer buffer, byte type) {
         switch (type) {
+            case 0x01:
+            case 0x09:
+            case 0x11:
+            case 0x12:
+                buffer.position(buffer.position() + 8);
+                break;
+            case 0x10:
+                buffer.position(buffer.position() + 4);
+                break;
             case 0x02:
             case 0x0D:
             case 0x0E:
@@ -147,10 +172,6 @@ final class Bson {
                 break;
             case 0x08:
                 buffer.position(buffer.position() + 1);
-                break;
-            case 0x09:
-            case 0x11:
-                buffer.position(buffer.position() + 8);
                 break;
             case 0x13:
                 buffer.position(buffer.position() + 16);
