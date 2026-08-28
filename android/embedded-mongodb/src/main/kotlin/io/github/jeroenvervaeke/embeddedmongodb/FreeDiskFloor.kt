@@ -74,9 +74,18 @@ data class ReportedFloors(val indexBuildMebibytes: Long, val querySpillingBytes:
  * @throws EmbeddedMongoException if the engine will not take the floor. Returned rather than
  *   logged: an application that asked for a floor and did not get it would otherwise find out
  *   at the index build, on the device where the index build was the thing that had to work.
+ *   The floors are put back where they were before the failure, so a refusal leaves the engine
+ *   as it was rather than half moved; [freeDiskFloors] reports where they ended up if even that
+ *   did not work.
  */
 suspend fun EmbeddedMongo.setFreeDiskFloor(floor: FreeDiskFloor) {
-    for (knob in freeDiskFloorCommands(floor)) command(ADMIN, knob)
+    val before = freeDiskFloors()
+    try {
+        for (knob in freeDiskFloorCommands(floor)) command(ADMIN, knob)
+    } catch (failure: Throwable) {
+        restore(before, failure) { knob -> command(ADMIN, knob) }
+        throw failure
+    }
 }
 
 /**
@@ -85,7 +94,13 @@ suspend fun EmbeddedMongo.setFreeDiskFloor(floor: FreeDiskFloor) {
  * @throws IllegalStateException if called on the main thread, or after [EmbeddedMongo.close].
  */
 fun EmbeddedMongo.setFreeDiskFloorBlocking(floor: FreeDiskFloor) {
-    for (knob in freeDiskFloorCommands(floor)) commandBlocking(ADMIN, knob)
+    val before = freeDiskFloorsBlocking()
+    try {
+        for (knob in freeDiskFloorCommands(floor)) commandBlocking(ADMIN, knob)
+    } catch (failure: Throwable) {
+        restore(before, failure) { knob -> commandBlocking(ADMIN, knob) }
+        throw failure
+    }
 }
 
 /** What the engine says the two floors are now. */
@@ -120,6 +135,33 @@ internal fun EmbeddedMongo.withFreeDiskFloor(floor: FreeDiskFloor?): EmbeddedMon
     }
     return this
 }
+
+/**
+ * Puts the floors back where [before] found them, after a move that did not finish.
+ *
+ * The two knobs take two commands, so a failure on the second leaves the first already moved --
+ * and moved *down*, in the case that matters, so an application that caught the exception and
+ * concluded nothing had happened would go on to build an index against a floor far lower than the
+ * one it believes is protecting it. That is the trade this module exists to make deliberate, so it
+ * is not one to make by accident.
+ *
+ * A restore that itself fails is attached to the original failure rather than replacing it: the
+ * caller is owed the reason their floor was refused first, and [ReportedFloors] is how they find
+ * out where the floors actually ended up.
+ */
+private inline fun restore(before: ReportedFloors, failure: Throwable, send: (Document) -> Unit) {
+    try {
+        for (knob in before.commands()) send(knob)
+    } catch (restoring: Throwable) {
+        failure.addSuppressed(restoring)
+    }
+}
+
+/** The `setParameter` commands that put these floors back, each in the unit its knob takes. */
+private fun ReportedFloors.commands(): List<Document> = listOf(
+    Document(SET_PARAMETER, 1).append(INDEX_BUILD_FLOOR, indexBuildMebibytes),
+    Document(SET_PARAMETER, 1).append(QUERY_SPILLING_FLOOR, querySpillingBytes),
+)
 
 /**
  * The two `setParameter` commands that move the floor, in the units each knob takes.

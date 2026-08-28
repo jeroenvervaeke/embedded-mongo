@@ -1,6 +1,7 @@
 package io.github.jeroenvervaeke.embeddedmongodb
 
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -93,23 +94,29 @@ class FreeDiskFloorTest {
 
     @Test
     fun `setting the floor sends both knobs to the admin database`() {
-        val engine = FakeEngine { okReply() }
+        val engine = engineReporting(500)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         database.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(64))
 
-        assertEquals(listOf("admin", "admin"), engine.databases)
-        assertEquals(freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)), engine.commands)
+        assertTrue(engine.databases.all { it == "admin" })
+        assertEquals(
+            freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)),
+            engine.commands.filter { it.keys.first() == "setParameter" },
+        )
     }
 
     @Test
     fun `the suspending form reaches the engine too`() {
-        val engine = FakeEngine { okReply() }
+        val engine = engineReporting(500)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         runBlocking { database.setFreeDiskFloor(FreeDiskFloor.ofMebibytes(64)) }
 
-        assertEquals(freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)), engine.commands)
+        assertEquals(
+            freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)),
+            engine.commands.filter { it.keys.first() == "setParameter" },
+        )
     }
 
     /**
@@ -118,7 +125,7 @@ class FreeDiskFloorTest {
      */
     @Test
     fun `the floor commands are not given a write concern on the way out`() {
-        val engine = FakeEngine { okReply() }
+        val engine = engineReporting(500)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         database.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(64))
@@ -137,12 +144,15 @@ class FreeDiskFloorTest {
 
     @Test
     fun `a floor named at open is applied before the caller is given the database`() {
-        val engine = FakeEngine { okReply() }
+        val engine = engineReporting(500)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         database.withFreeDiskFloor(FreeDiskFloor.ofMebibytes(64))
 
-        assertEquals(freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)), engine.commands)
+        assertEquals(
+            freeDiskFloorCommands(FreeDiskFloor.ofMebibytes(64)),
+            engine.commands.filter { it.keys.first() == "setParameter" },
+        )
     }
 
     /**
@@ -151,7 +161,7 @@ class FreeDiskFloorTest {
      */
     @Test
     fun `an engine that refuses the floor is closed rather than left running`() {
-        val engine = FakeEngine { Document("ok", 0.0).append("errmsg", "no such parameter") }
+        val engine = engineReporting(500, refuse = INDEX_BUILD)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         assertFailsWith<EmbeddedMongoException> {
@@ -163,14 +173,84 @@ class FreeDiskFloorTest {
 
     @Test
     fun `the failure the caller sees is the engine's refusal, not the close`() {
-        val engine = FakeEngine { Document("ok", 0.0).append("errmsg", "no such parameter") }
+        val engine = engineReporting(500, refuse = INDEX_BUILD)
         val database = EmbeddedMongo(engine, guard(onMainThread = false))
 
         val failure = assertFailsWith<EmbeddedMongoException> {
             database.withFreeDiskFloor(FreeDiskFloor.ofMebibytes(64))
         }
 
-        assertEquals("no such parameter", failure.message)
+        assertEquals("no such parameter $INDEX_BUILD", failure.message)
         assertNull(failure.cause)
     }
+
+    /** A close that also fails must not replace the refusal that sent the caller here. */
+    @Test
+    fun `a close that fails on the way out is attached to the refusal`() {
+        val engine = engineReporting(
+            500,
+            refuse = INDEX_BUILD,
+            closeFailure = IllegalStateException("the engine would not shut down"),
+        )
+        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+
+        val failure = assertFailsWith<EmbeddedMongoException> {
+            database.withFreeDiskFloor(FreeDiskFloor.ofMebibytes(64))
+        }
+
+        assertEquals("no such parameter $INDEX_BUILD", failure.message)
+        assertContains(failure.suppressed.map { it.message }, "the engine would not shut down")
+    }
+
+    /**
+     * The two knobs take two commands, so a refusal on the second leaves the first already moved
+     * -- and moved down, which is the direction that trades a clean refusal for an abort. A
+     * caller who catches the exception must be able to believe nothing happened.
+     */
+    @Test
+    fun `a floor the engine only half accepts is put back where it was`() {
+        val engine = engineReporting(500, refuse = QUERY_SPILLING)
+        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+
+        assertFailsWith<EmbeddedMongoException> {
+            database.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(64))
+        }
+
+        assertEquals(
+            listOf(64L, 500L),
+            engine.commands.mapNotNull { it[INDEX_BUILD] as? Long },
+            "the index build floor was left where the failed move put it",
+        )
+    }
+
+    @Test
+    fun `a restore that fails too is attached to the failure rather than hiding it`() {
+        val engine = engineReporting(500, refuse = QUERY_SPILLING)
+        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+
+        val failure = assertFailsWith<EmbeddedMongoException> {
+            database.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(64))
+        }
+
+        assertTrue(failure.message.orEmpty().contains(QUERY_SPILLING), failure.message.orEmpty())
+        assertEquals(1, failure.suppressed.size, "the failed restore is owed to the caller too")
+    }
+
+    @Test
+    fun `a floor the engine takes is not followed by a restore`() {
+        val engine = engineReporting(500)
+        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+
+        database.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(64))
+
+        assertEquals(
+            listOf(64L),
+            engine.commands.mapNotNull { it[INDEX_BUILD] as? Long },
+            "a move that worked must not be undone",
+        )
+    }
 }
+
+private const val INDEX_BUILD = "indexBuildMinAvailableDiskSpaceMB"
+
+private const val QUERY_SPILLING = "internalQuerySpillingMinAvailableDiskSpaceBytes"

@@ -6,7 +6,10 @@ import org.bson.Document
  * An [Engine] that answers from Kotlin rather than from the native library, so cursor paging,
  * error mapping and the threading policy can be tested on the JVM.
  */
-internal class FakeEngine(private val reply: (Document) -> Document) : Engine {
+internal class FakeEngine(
+    private val closeFailure: Throwable? = null,
+    private val reply: (Document) -> Document,
+) : Engine {
     val commands = mutableListOf<Document>()
     val databases = mutableListOf<String>()
     val threads = mutableListOf<String>()
@@ -23,6 +26,7 @@ internal class FakeEngine(private val reply: (Document) -> Document) : Engine {
 
     override fun close() {
         closes++
+        closeFailure?.let { throw it }
     }
 }
 
@@ -56,6 +60,26 @@ internal class FakeRunner(replies: List<Document>) : CommandRunner {
         commands += command
         check(replies.isNotEmpty()) { "the cursor issued an unexpected command: $command" }
         return replies.removeAt(0)
+    }
+}
+
+/**
+ * An [Engine] that reports both free-disk floors as [mebibytes] and accepts every command, except
+ * that a `setParameter` naming [refuse] is rejected the way an engine without that knob would.
+ */
+internal fun engineReporting(
+    mebibytes: Long,
+    refuse: String? = null,
+    closeFailure: Throwable? = null,
+) = FakeEngine(closeFailure) { command ->
+    when {
+        command.keys.first() == "getParameter" -> okReply(
+            "indexBuildMinAvailableDiskSpaceMB" to mebibytes,
+            "internalQuerySpillingMinAvailableDiskSpaceBytes" to mebibytes * 1024 * 1024,
+        )
+        refuse != null && command.containsKey(refuse) ->
+            Document("ok", 0.0).append("errmsg", "no such parameter $refuse")
+        else -> okReply()
     }
 }
 
