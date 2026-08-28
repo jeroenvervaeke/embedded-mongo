@@ -1,6 +1,10 @@
-// The Android half of what decides what the native library contains. `include!`d by
-// build_native.rs, and watched alongside it, because the NDK it picks and the API level it
-// targets are part of the published library's ABI.
+// The Android half of what decides what the native library contains. A sibling of
+// build_native rather than a part of it, and watched alongside it, because the NDK it picks
+// and the API level it targets are part of the published library's ABI.
+
+use std::env;
+use std::path::PathBuf;
+use std::process::Command;
 
 /// Android API level the published libraries target. Android 7.0, the oldest release NDK 27
 /// and 28 still support, which covers effectively every device that still receives apps.
@@ -17,7 +21,7 @@ const ANDROID_NDK_VARIABLES: &[&str] = &["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT",
 /// Every path is absolute and every choice is baked in, because Bazel scrubs the environment
 /// for sandboxed actions: a compiler wrapper that read the target triple from a variable at
 /// run time would see nothing and silently build for the host instead.
-struct AndroidNdk {
+pub(crate) struct AndroidNdk {
     cc: PathBuf,
     cxx: PathBuf,
     bin: PathBuf,
@@ -28,7 +32,7 @@ struct AndroidNdk {
 }
 
 impl AndroidNdk {
-    fn detect(target_arch: &str) -> AndroidNdk {
+    pub(crate) fn detect(target_arch: &str) -> AndroidNdk {
         // No 32-bit Android. MongoDB builds only for 64-bit platforms, and both remaining
         // 32-bit ABIs are below the memory ceiling WiredTiger's cache assumes.
         let (triple, cpu) = match target_arch {
@@ -83,7 +87,7 @@ impl AndroidNdk {
 
     /// Points Bazel's system-compiler toolchain at the NDK and tells it which architecture it
     /// is now targeting.
-    fn apply(&self, command: &mut Command) {
+    pub(crate) fn apply(&self, command: &mut Command) {
         command
             .env("CC", &self.cc)
             .env("CXX", &self.cxx)

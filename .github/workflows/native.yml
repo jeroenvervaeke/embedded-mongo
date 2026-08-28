@@ -731,6 +731,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
+          # The manifest this job re-tests names the commit it was built from, and build.rs
+          # refuses to use a library it cannot place in this checkout's history.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:

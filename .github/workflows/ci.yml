@@ -30,7 +30,7 @@ jobs:
           manifest=embedded-mongodb-sys/prebuilt.rs
           source_commit=$(sed -n 's/^const SOURCE_COMMIT: &str = "\(.*\)";$/\1/p' "$manifest")
           tag=$(sed -n 's/^const RELEASE_TAG: &str = "\(.*\)";$/\1/p' "$manifest")
-          paths='patches embedded-mongodb-sys/native embedded-mongodb-sys/build_native.rs'
+          paths='patches embedded-mongodb-sys/native embedded-mongodb-sys/build_native.rs embedded-mongodb-sys/build_android.rs'
 
           if ! git rev-parse --quiet --verify "$source_commit^{commit}" > /dev/null; then
             echo "::error::$manifest names $source_commit, which is not a commit in this repository."
@@ -67,12 +67,16 @@ jobs:
           grep -q "$pin" NOTICE \
             || { echo "::error::NOTICE does not name the pinned mongo commit $pin"; exit 1; }
 
-  # Deliberately not gated on prebuilt-freshness. A stale manifest is the normal state right
-  # after a submodule bump, and gating would hide every formatting and lint failure behind it.
+  # Deliberately not gated on prebuilt-freshness: `cargo fmt` runs before anything touches the
+  # native library, so a formatting failure is reported even while the manifest is stale. Only
+  # clippy is hidden behind it, and it has no choice -- checking a crate means running its
+  # build script, and that script refuses to resolve a library this tree has outgrown.
   lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -108,6 +112,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5 # No submodule.
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
@@ -149,6 +155,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -193,6 +201,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin

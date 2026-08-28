@@ -449,6 +449,11 @@ Changing anything the published library was built from — the submodule pin, `p
 matches the source beside it. Publish a new one with `gh workflow run native.yml --ref
 <branch> -f publish=true`, which builds every target and commits the regenerated manifest.
 
+That comparison is against a commit, so it needs the history that holds it: clone this
+repository in full, or `git fetch --unshallow` a shallow one. A shallow checkout that cannot
+reach that commit is refused outright rather than built against a library nothing has
+checked.
+
 Sizes of the published libraries, as recorded in the manifest:
 
 | target | bytes |
