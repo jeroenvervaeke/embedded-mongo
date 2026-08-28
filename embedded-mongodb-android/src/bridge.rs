@@ -1,11 +1,12 @@
 use embedded_mongodb::Client;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JClass, JLongArray, JString};
 use jni::sys::jlong;
 use jni::{Env, EnvUnowned};
 
 use crate::error::{BridgeError, Result};
 use crate::handle::HandleId;
 use crate::jvm::ThrowEmbeddedMongoException;
+use crate::options::{self, SLOTS};
 use crate::registry::registry;
 
 /// `static native long open(String path)`.
@@ -22,6 +23,28 @@ pub extern "system" fn Java_io_github_jeroenvervaeke_embeddedmongodb_NativeBridg
     // undefined behaviour, so no code path here may skip it.
     unowned_env
         .with_env(|env| open(env, &path))
+        .resolve::<ThrowEmbeddedMongoException>()
+}
+
+/// `static native long openWithOptions(String path, long[] options)`.
+///
+/// [`crate::options`] documents what the array holds and why it is an array. A separate name
+/// rather than an overload of `open`: the JVM resolves a native method by its short symbol
+/// name first, and two natives sharing a name both resolve to that one symbol -- so an
+/// overload would silently bind one of them to a function expecting the other's arguments,
+/// unless every `open` were renamed to its signature-mangled long form. That rename would
+/// break the entry point this library has already published.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_jeroenvervaeke_embeddedmongodb_NativeBridge_openWithOptions<
+    'local,
+>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    path: JString<'local>,
+    options: JLongArray<'local>,
+) -> jlong {
+    unowned_env
+        .with_env(|env| open_with_options(env, &path, &options))
         .resolve::<ThrowEmbeddedMongoException>()
 }
 
@@ -65,8 +88,44 @@ pub extern "system" fn Java_io_github_jeroenvervaeke_embeddedmongodb_NativeBridg
 /// this is the one call site where reaching straight for the FFI would cost the most.
 fn open(env: &mut Env<'_>, path: &JString<'_>) -> Result<jlong> {
     let path = read_string(env, path, "path")?;
-    let client = Client::new(&path)?;
+    issue(Client::new(&path)?)
+}
+
+fn open_with_options(
+    env: &mut Env<'_>,
+    path: &JString<'_>,
+    options: &JLongArray<'_>,
+) -> Result<jlong> {
+    let path = read_string(env, path, "path")?;
+    let options = options::open_options(read_slots(env, options)?)?;
+    issue(Client::with_options(&path, options)?)
+}
+
+fn issue(client: Client) -> Result<jlong> {
     Ok(registry().insert(client)?.get())
+}
+
+/// Copies as many slots as this build understands out of the caller's array, leaving the rest
+/// unset.
+///
+/// The length gate is what makes the vector growable in both directions, and it has to gate
+/// the copy rather than the interpretation: reading past the end of the caller's array is an
+/// `ArrayIndexOutOfBoundsException` from `GetLongArrayRegion`, not a shorter answer.
+fn read_slots(env: &mut Env<'_>, options: &JLongArray<'_>) -> Result<[jlong; SLOTS]> {
+    if options.is_null() {
+        return Err(BridgeError::invalid_argument(
+            "options must not be null; an empty array asks for the engine's defaults",
+        ));
+    }
+    let mut slots = [0; SLOTS];
+    let read = options.len(env)?.min(SLOTS);
+    let Some(destination) = slots.get_mut(..read) else {
+        return Err(BridgeError::invalid_argument(format!(
+            "{read} option slots cannot be read into {SLOTS}"
+        )));
+    };
+    options.get_region(env, 0, destination)?;
+    Ok(slots)
 }
 
 fn run_command<'local>(

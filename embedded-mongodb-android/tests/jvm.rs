@@ -98,6 +98,61 @@ fn the_bridge_repairs_a_directory_an_older_build_damaged() {
     }
 }
 
+/// The storage limits, both mechanisms, against a real engine.
+///
+/// The unit tests in `src/options.rs` prove the slot vector becomes the right `OpenOptions`;
+/// this proves the entry point is bound, that what it was handed reached WiredTiger, and that
+/// the free-disk floor moves over the `command` entry point alone -- which is what lets the
+/// Kotlin side set it without a native symbol of its own.
+#[test]
+fn the_storage_limits_reach_the_engine_through_the_bridge() {
+    for library in bridge_libraries() {
+        let output = run_harness("OptionsHarness", &library, "classes-options", Database::Own);
+        for expected in [
+            "PASS a null option vector is rejected",
+            "PASS limits outside the engine's range are refused before it opens",
+            "PASS openWithOptions reads what it knows and ignores the rest",
+            "PASS every limit reached WiredTiger",
+            "PASS the engine starts on MongoDB's 500 MB floor",
+            "PASS the floor moved without a native entry point of its own",
+            "PASS an index build is refused below the floor",
+            "PASS lowering the floor is what lets the index build run",
+            "PASS all",
+        ] {
+            assert!(
+                output.contains(expected),
+                "missing `{expected}` from {}:\n{output}",
+                library.display()
+            );
+        }
+    }
+}
+
+/// A caller that fills in fewer slots than this build reads -- the shape every growth of the
+/// option vector has to keep working, and the shape the Kotlin side sends whenever a caller
+/// names some limits and not others.
+#[test]
+fn a_short_option_vector_defaults_the_slots_it_leaves_off() {
+    for library in bridge_libraries() {
+        let output = run_harness(
+            "PartialOptionsHarness",
+            &library,
+            "classes-partial-options",
+            Database::Own,
+        );
+        for expected in [
+            "PASS a short option vector names one limit and defaults the rest",
+            "PASS all",
+        ] {
+            assert!(
+                output.contains(expected),
+                "missing `{expected}` from {}:\n{output}",
+                library.display()
+            );
+        }
+    }
+}
+
 #[test]
 fn a_panic_reaches_java_as_an_exception() {
     let output = run_harness(
