@@ -40,12 +40,21 @@ const SECTIONS: &[Section] = &[
     ("bson_types", bson_types),
     ("collection_administration", collection_administration),
     ("error_paths", error_paths),
+    ("raw_command_bytes", raw_command_bytes),
     ("embedded_identity", embedded_identity),
 ];
 
 #[test]
 fn engine_features_survive_the_build_cuts() {
-    let temporary = tempfile::tempdir().unwrap();
+    // Under `target`, never the system temporary directory: that is a ramdisk on a good many
+    // Linux machines, and the engine preallocates a couple of hundred megabytes of WiredTiger
+    // journal for every data directory it opens, however few documents go in.
+    let base = env!("CARGO_TARGET_TMPDIR");
+    std::fs::create_dir_all(base).unwrap();
+    let temporary = tempfile::Builder::new()
+        .prefix("features-")
+        .tempdir_in(base)
+        .unwrap();
     let client = Client::new(temporary.path().join("database")).unwrap();
 
     for (name, section) in SECTIONS {
@@ -918,6 +927,36 @@ fn error_paths(client: &Client) {
     assert_eq!(rows.find(doc! {}).unwrap().try_collect().unwrap().len(), 1);
 }
 
+/// The byte route, which is how the Python and Android bindings run every command.
+///
+/// It differs from `run_command` in one way, and that difference is the reason it exists: a
+/// command the server refuses comes back as a reply the caller can hand on verbatim rather
+/// than as an error. Those bindings owe their callers that reply, and having it here is what
+/// lets them open through `Client::new` -- and so through the one-time index repair pass --
+/// instead of reaching past this crate to the raw FFI client.
+fn raw_command_bytes(client: &Client) {
+    let answered = reply(client, &doc! { "ping": 1 });
+    assert_eq!(answered.get_f64("ok").ok(), Some(1.0));
+
+    let refused = reply(client, &doc! { "thisIsNotACommand": 1 });
+    assert_eq!(
+        refused.get_f64("ok").ok(),
+        Some(0.0),
+        "a refused command must come back as a reply, not as an error: {refused:?}"
+    );
+    assert!(
+        refused.get_i32("code").is_ok(),
+        "the reply must carry the MongoDB error code: {refused:?}"
+    );
+    // The document route raises the very same refusal, which is why the bindings cannot use
+    // it: an exception where their caller is owed `ok: 0`.
+    assert!(
+        client
+            .run_command("admin", &doc! { "thisIsNotACommand": 1 })
+            .is_err()
+    );
+}
+
 /// The three surfaces that identify this engine as the embedded build.
 ///
 /// Nothing can attach a shell or Compass to an in-process engine, so this is how a caller
@@ -993,4 +1032,10 @@ fn embedded_identity(client: &Client) {
         embedded.get_str("author").ok(),
         "command and serverStatus disagree about the author"
     );
+}
+
+fn reply(client: &Client, command: &Document) -> Document {
+    let encoded = command.to_vec().unwrap();
+    let response = client.run_command_bytes("admin", &encoded).unwrap();
+    Document::from_reader(response.as_slice()).unwrap()
 }

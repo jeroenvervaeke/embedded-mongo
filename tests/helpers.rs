@@ -26,7 +26,15 @@ fn features_work_end_to_end() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Client>();
 
-    let temporary = tempfile::tempdir().unwrap();
+    // Under `target`, never the system temporary directory: that is a ramdisk on a good many
+    // Linux machines, and the engine preallocates a couple of hundred megabytes of WiredTiger
+    // journal for every data directory it opens, however few documents go in.
+    let base = env!("CARGO_TARGET_TMPDIR");
+    std::fs::create_dir_all(base).unwrap();
+    let temporary = tempfile::Builder::new()
+        .prefix("helpers-")
+        .tempdir_in(base)
+        .unwrap();
     let path = temporary.path().join("database");
 
     let client = Client::new(&path).unwrap();
