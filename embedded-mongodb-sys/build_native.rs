@@ -45,7 +45,17 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     };
     let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
 
-    eprintln!("building embedded MongoDB with Bazel");
+    // Under OUT_DIR so that `cargo clean` takes it with everything else and two profiles or
+    // targets building at once cannot share one log. Handing this file to Bazel rather than
+    // the pipes cargo supplies is what keeps a finished build from hanging cargo forever;
+    // `run_logged` in build.rs has the details.
+    let log_path =
+        PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR for build scripts"))
+            .join("bazel-build.log");
+    eprintln!(
+        "building embedded MongoDB with Bazel; full output in {}",
+        log_path.display()
+    );
     let mut command = Command::new(&bazel);
     command
         .current_dir(&mongo_root)
@@ -195,14 +205,18 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
         // command-line --linker outranks the one the config supplies.
         command.arg("--linker=auto");
     }
-    let status = command.status().unwrap_or_else(|error| {
+    let status = run_logged(&mut command, &log_path).unwrap_or_else(|error| {
         panic!(
             "failed to run {}: {error}; install Bazel with \
              `python3.13 mongo/buildscripts/install_bazel.py` or set BAZEL",
             PathBuf::from(&bazel).display()
         )
     });
-    assert!(status.success(), "Bazel native build failed with {status}");
+    assert!(
+        status.success(),
+        "Bazel native build failed with {status}. Its output is above, and in {}",
+        log_path.display()
+    );
 
     mongo_root
         .join("bazel-bin/external/mongot_localdev")

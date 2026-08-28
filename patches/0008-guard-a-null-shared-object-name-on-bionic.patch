@@ -1,0 +1,18 @@
+--- a/src/mongo/util/stacktrace_posix.cpp
++++ b/src/mongo/util/stacktrace_posix.cpp
+@@ -492,7 +492,14 @@ public:
+     int initCb(dl_phdr_info* info, size_t sz) {
+         _entries.push_back(Entry{
+             .addr = info->dlpi_addr,
+-            .name = std::string{info->dlpi_name},
++            // Bionic hands this callback a null dlpi_name for some objects on Android
++            // releases before 9.0, where glibc passes the empty string. Constructing a
++            // std::string from it is strlen(nullptr), which segfaults inside a
++            // dl_iterate_phdr callback while the library is still loading -- before any
++            // MongoDB error handling exists to report it. Empty is what iterate() hands
++            // back to libunwind anyway, and what every reader of dlpi_name already treats
++            // as "this object has no name".
++            .name = info->dlpi_name ? std::string{info->dlpi_name} : std::string{},
+             .phdr = info->dlpi_phdr,
+             .phnum = info->dlpi_phnum,
+             .adds = info->dlpi_adds,

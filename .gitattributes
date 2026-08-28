@@ -1,0 +1,6 @@
+# The index repair fixture is a WiredTiger data directory stored one gzip stream per file. None
+# of those streams happens to contain a NUL byte, so git's own binary detection reads them as
+# text, and a checkout with `core.autocrlf` would rewrite the CR and LF bytes inside the
+# compressed data. Nothing would report that; the repair test would simply fail to unpack a
+# directory it could no longer regenerate.
+tests/fixtures/** binary

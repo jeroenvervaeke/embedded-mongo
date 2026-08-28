@@ -3,7 +3,8 @@
 Most of this repository is ordinary Rust. The exception is the MongoDB engine itself, which
 takes hours to compile, so it is built once in CI and downloaded everywhere else. This file
 covers that machinery: where the library comes from, what is cached, and how to publish a new
-one.
+one. It also covers the one-time repair pass for directories an older engine damaged, because
+testing that needs an engine no current checkout builds.
 
 For using the library, see the [README](README.md). For why the engine is the size it is, see
 [`docs/native-size-reduction.md`](docs/native-size-reduction.md).
@@ -230,6 +231,69 @@ Adding a dependency therefore fails the build until someone classifies it. That 
 LGPL-2.1, which a stripped, LTO'd, version-scripted static library cannot satisfy — and why
 `--//bazel/config:dev_stacktrace=False` now removes both.
 
+## The one-time index repair pass
+
+`src/repair/` is a migration over user data, not part of the engine. It exists because
+`fix(engine): register databases already on disk at startup` fixed the engine and could not fix
+the directories an older build had already damaged: those still hold documents that reached the
+record store and no index. `Client::new` runs `validate`, and `validate {repair: true}` where
+that reports errors or missing entries, once per directory. The README section *Repairing a
+directory an older build damaged* is the user-facing half.
+
+It lives in the Rust layer rather than in `embedded-mongodb-sys/native/` on purpose: a published
+engine build stays exactly as published, the pass can be changed without a rebuild, and it can be
+tested against a real damaged directory rather than through the engine's startup path.
+
+Three decisions are worth knowing before changing it:
+
+- **The marker is written only by a pass that visited every collection**, through a temporary
+  file and a rename. A process that dies partway leaves no marker and the next open starts over;
+  `validate {repair: true}` is idempotent, so an already-repaired collection validates clean and
+  is left alone.
+- **Nothing here may fail an open.** The alternative to a pass that could not run is the state
+  every already-published build is in, whereas an open that refuses leaves the caller with no
+  route to their data. Failures are reported through `tracing` and the client is returned. A
+  directory the process cannot write to never reaches the pass at all: the engine's startup
+  checkpoint panics and `fassert` aborts the process first, which
+  `tests/durability/storage.rs` pins.
+- **A collection still damaged after a repair does not hold the marker back.** Repeating a repair
+  that did not work on every open would trade a data defect for a startup cost without fixing
+  anything. It is reported at `WARN` and the pass moves on. A `validate` that *threw* is
+  different, and is not a verdict at all: the engine catches everything but an interrupt, records
+  it as a warning and still answers `ok: 1, valid: true`, so `Health::Inconclusive` exists to
+  keep that from being read as a clean bill of health and marking the directory done.
+- **`validate {repair: true}` has one destructive branch.** It deletes records whose BSON cannot
+  be read, with no lost and found for them. That is not damage this defect produces, but the
+  repair is the engine's general-purpose one and the trigger is any validation error, so
+  `announce_deletions` reports it separately and the README says so.
+
+### The damaged fixture
+
+`tests/fixtures/damaged-reopen/` is a data directory a pre-fix engine produced, committed because
+no current checkout can build an engine that would produce another. Each file is stored gzipped
+on its own — the tables are mostly page padding, so the directory compresses by a factor of
+twenty with no archive format to hand-roll — and `tests/repair/fixture.rs` documents what is in
+it and why the journal and lock files are left out. `.gitattributes` marks the directory
+`binary`, because none of those gzip streams happens to contain a NUL byte and git's own
+detection would otherwise read them as text.
+
+Regenerating it needs a library from before the fix:
+
+```sh
+EMBEDDED_MONGODB_NATIVE_LIB_DIR=<dir with a pre-fix libembedded_mongodb_native.so> \
+  cargo run --release --example <a program that creates, closes, reopens and writes>
+```
+
+A pre-fix library is any entry in the download cache older than that commit; see
+[Caching](#the-download-cache) for where they are. The directory the program leaves behind, minus
+`journal/`, `_tmp/`, `mongod.lock` and `WiredTiger.lock`, is the fixture. `tests/repair/main.rs`
+asserts against the exact document and index counts it holds, so replacing it means revisiting
+those.
+
+`tests/repair_skip.rs` is a separate target because `EMBEDDED_MONGODB_SKIP_INDEX_REPAIR` has to
+be in the environment before anything opens an engine, and `set_var` is only sound while no other
+thread can read the environment.
+
 ## Building the engine from source
 
 Needed only when changing the engine. See the README for the toolchain requirements.
@@ -260,6 +324,10 @@ bionic at the API level `embedded-mongodb-sys/build_android.rs` pins. Bazel is t
 target platform is `@platforms//os:linux` — Android is a Linux kernel with a different libc,
 and every `select()` in the engine and its third-party tree is written against `os:linux` —
 and `patches/0007-build-for-android.patch` covers what bionic and libc++ do not provide.
+`patches/0008-guard-a-null-shared-object-name-on-bionic.patch` covers the other direction:
+bionic hands `dl_iterate_phdr` callbacks a null object name where glibc passes the empty
+string, and the stack-trace machinery took that on trust — a segfault as the library loads
+on Android releases before 9.0, which is below the `minSdk` the AAR advertises.
 
 Intel macOS is absent because that runner never finished a build inside the six-hour job cap,
 and GitHub retires the image in August 2027. Windows is tracked in

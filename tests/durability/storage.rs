@@ -1,8 +1,7 @@
 //! Opening where the engine cannot write, which is what an Android device with no space left
 //! or an app whose storage has been taken away looks like from in here.
 //!
-//! One of the two probes here pins a defect rather than a guarantee — the fifth of the five
-//! pinned defects, the other four being everything in `reopened`. A failure in
+//! One of the two probes here pins a defect rather than a guarantee. A failure in
 //! [`an_unwritable_database_directory_aborts_the_process`] means the engine was fixed, not that
 //! someone broke it.
 

@@ -1,37 +1,32 @@
-//! What a reopened database can no longer do.
+//! What a reopened database can do.
 //!
-//! Every probe here pins a defect rather than a guarantee, and they share one cause:
-//! `DatabaseHolder::openDb` is never called for a database that already exists on disk, and it
-//! is the only code that both registers the `Database` in `_dbs` and calls `init()` down to
-//! `IndexCatalog::init()`. `listCollections` gates on `DatabaseHolder::dbExists`, while `find`,
-//! `count` and `listIndexes` read the `CollectionCatalog` — which is why some commands work,
-//! some see nothing, and one aborts. Documents stay reachable throughout, which is what makes
-//! all of this so easy to miss.
+//! Every probe here used to pin a defect. They shared one cause: `DatabaseHolder::openDb` was
+//! never called for a database that already existed on disk, and it is the only code that both
+//! registers the `Database` in `_dbs` and calls `init()` down to `IndexCatalog::init()`. A
+//! reopened database therefore listed no collections, hid every index from the planner, kept no
+//! index up to date on write — `_id_` included — and aborted the process on any command that
+//! acquired a collection by UUID.
 //!
-//! # A FAILURE HERE IS GOOD NEWS
-//!
-//! These probes are written to go red when the engine is repaired. A fix is queued. When it
-//! lands, all four probes in this file should fail, and so should
-//! `storage::an_unwritable_database_directory_aborts_the_process` — five pinned defects in all.
-//! Do not "repair" a red probe by restoring the behaviour it describes. Rewrite it as an
-//! assertion that the engine now does the right thing.
+//! The engine now runs `catalog_repair::reconcileCatalogAndIdents` and then opens every database
+//! on disk, which is what mongod's startup recovery does. These probes assert the result: a
+//! directory that comes back from disk is indistinguishable from one this process created.
 
 use crate::probe::{Role, harness::Child, index::SAMPLED_BUCKETS, scratch, workload::PER_CYCLE};
 
-/// Documents behind the index in [`secondary_indexes_are_unusable_after_reopening`]. Enough
-/// that a planner with a working index would have every reason to prefer it.
+/// Documents behind the index in [`secondary_indexes_answer_queries_after_reopening`]. Enough
+/// that a planner with a working index has every reason to prefer it, so a `COLLSCAN` there
+/// means the index is unusable rather than merely unattractive.
 const INDEXED_DOCUMENTS: i64 = 400_000;
 
-/// A defect, pinned rather than blessed.
-///
-/// A reopened database is queryable — `find`, `count` and `listIndexes` all reach its
-/// collections — but `listCollections` reports the database as empty. Only a collection
-/// created in the current session shows up, so anything that enumerates the catalog sees
-/// nothing after a restart. Same root cause as
-/// [`creating_an_index_after_reopening_aborts_the_process`]: the reopened database is never
-/// put back into the engine's database holder, and both commands go through it.
+/// MongoDB's duplicate key error.
+const DUPLICATE_KEY: &str = "11000";
+
+/// `listCollections` enumerates the database holder, which is populated only by `openDb`. It is
+/// the cheapest, sharpest check that a database restored from disk was actually opened rather
+/// than merely present in the collection catalog — `find`, `count` and `listIndexes` all read
+/// the catalog and answered correctly even when this returned an empty batch.
 #[test]
-fn the_collection_catalog_is_not_listable_after_reopening() {
+fn every_collection_is_listable_after_reopening() {
     let directory = scratch::directory();
     let path = directory.path().join("database");
     Child::spawn(Role::ReopenCycles, &path, 1)
@@ -43,28 +38,27 @@ fn the_collection_catalog_is_not_listable_after_reopening() {
 
     assert_eq!(
         reopened.get("collections"),
-        "",
-        "listCollections reported the collection — THE ENGINE HAS BEEN FIXED; make this probe assert that it lists \
-         every collection in the database"
+        "records",
+        "listCollections did not report the collection the previous process left behind\n{}",
+        reopened.transcript()
     );
     assert_eq!(
         reopened.get("indexes"),
         "_id_",
-        "the collection is reachable by every route except the listing\n{}",
+        "the collection is reachable by every route\n{}",
         reopened.transcript()
     );
     assert_eq!(reopened.number("count"), PER_CYCLE);
 }
 
-/// A defect, pinned rather than blessed.
+/// A secondary index built in one session is used by the next one.
 ///
-/// A secondary index survives a restart in the catalog and nowhere else. `listIndexes` reports
-/// it, and neither route into it works: the planner picks a collection scan for a query the
-/// index covers, and `hint` on it is refused. Building the index and querying it in one session
-/// gives `IXSCAN`, so this is about reopening, not about the index. Every read after a restart
-/// is therefore a collection scan, whatever indexes the app thinks it has.
+/// Three counts per sampled bucket have to agree: through the index, through a hint that demands
+/// it, and through a forced collection scan of the same field. The access path is asserted
+/// first, because counts taken "through the index" and counts from a scan would agree trivially
+/// if both were scans.
 #[test]
-fn secondary_indexes_are_unusable_after_reopening() {
+fn secondary_indexes_answer_queries_after_reopening() {
     let directory = scratch::directory();
     let path = directory.path().join("database");
     Child::spawn(Role::BuildIndex, &path, INDEXED_DOCUMENTS)
@@ -77,12 +71,12 @@ fn secondary_indexes_are_unusable_after_reopening() {
     assert_eq!(
         reopened.get("has_index"),
         "true",
-        "the index did not survive a clean close, which is a different bug from this one\n{}",
+        "the index did not survive a clean close\n{}",
         reopened.transcript()
     );
-    // The count first. `all` answers an empty slice for a key that was never reported, and
-    // `iter().all(..)` is true of an empty slice, so a probe that stopped reporting would sail
-    // through the predicate below without ever having looked at an index.
+    // The counts of results first, not just their contents: `all` answers an empty slice for a
+    // key that was never reported, and a probe that stopped reporting would sail through every
+    // predicate below without ever having looked at an index.
     assert_eq!(
         reopened.all("indexed_plan").len(),
         SAMPLED_BUCKETS.len(),
@@ -95,67 +89,96 @@ fn secondary_indexes_are_unusable_after_reopening() {
         reopened
             .all("indexed_plan")
             .iter()
-            .all(|plan| plan == "COLLSCAN"),
-        "the planner used an index after a reopen — THE ENGINE HAS BEEN FIXED; make this probe and \
-         `crash::no_query_is_answered_from_the_index_a_killed_build_left` into the real \
-         index-versus-scan cross-checks they look like\n{}",
-        reopened.transcript()
-    );
-    assert_eq!(
-        reopened.all("hinted").len(),
-        SAMPLED_BUCKETS.len(),
-        "the reopen reported {} hint results, not the {} it samples\n{}",
-        reopened.all("hinted").len(),
-        SAMPLED_BUCKETS.len(),
+            .all(|plan| plan == "INDEXED"),
+        "the planner fell back to a collection scan on an indexed field\n{}",
         reopened.transcript()
     );
     assert!(
-        reopened.all("hinted").iter().all(|hint| hint == "rejected"),
-        "a hint onto the index was accepted after a reopen — THE ENGINE HAS BEEN FIXED; make this probe assert \
-         that the hinted count matches the collection scan\n{}",
+        reopened.all("hinted").iter().all(|hint| hint == "ok"),
+        "a hint onto the index was refused\n{}",
+        reopened.transcript()
+    );
+    // Anchors the two comparisons below, which are equalities between slices and would hold
+    // vacuously if the probe had reported no counts at all.
+    assert_eq!(
+        reopened.all("scanned_count").len(),
+        SAMPLED_BUCKETS.len(),
+        "the reopen reported {} scan counts, not the {} it samples\n{}",
+        reopened.all("scanned_count").len(),
+        SAMPLED_BUCKETS.len(),
+        reopened.transcript()
+    );
+    assert_eq!(
+        reopened.all("indexed_count"),
+        reopened.all("scanned_count"),
+        "the index answered a different count than a collection scan of the same field\n{}",
+        reopened.transcript()
+    );
+    assert_eq!(
+        reopened.all("hinted_count"),
+        reopened.all("scanned_count"),
+        "the hinted count did not match the collection scan\n{}",
         reopened.transcript()
     );
 }
 
-/// A defect, pinned rather than blessed.
-///
-/// Building an index on a collection the process found on disk kills the process:
-/// `IndexBuildsCoordinator` registers the build, cannot find the database behind the UUID it
-/// just resolved, and MongoDB answers that with `invariant()` — "Database for probe.records
-/// disappeared after successfully resolving <uuid>" — which calls `abort()`. Building the same
-/// index in the session that created the collection is fine, so this is about reopening, not
-/// about index builds.
+/// Building an index on a collection this process found on disk used to abort it, through the
+/// "Database for probe.records disappeared after successfully resolving <uuid>" invariant that
+/// `IndexBuildsCoordinator` reaches by acquiring the collection by UUID. The probe asserts both
+/// halves of the fix: the build completes, and the index it produced is one the next session
+/// can actually query through.
 #[test]
-fn creating_an_index_after_reopening_aborts_the_process() {
+fn an_index_can_be_created_on_a_reopened_database() {
     let directory = scratch::directory();
     let path = directory.path().join("database");
     Child::spawn(Role::ReopenCycles, &path, 1)
         .finish()
         .assert_exited_cleanly();
 
-    let outcome = Child::spawn(Role::IndexExisting, &path, 0).finish();
-    outcome.report();
-    assert!(
-        outcome.was_aborted(),
-        "createIndexes on a reopened database no longer aborts — THE ENGINE HAS BEEN FIXED; make this probe assert \
-         that the index is created and usable\n{}",
-        outcome.transcript()
+    let built = Child::spawn(Role::IndexExisting, &path, 0).finish();
+    built.assert_exited_cleanly().report();
+    assert_eq!(
+        built.get("create_indexes"),
+        "ok",
+        "createIndexes on a reopened database failed\n{}",
+        built.transcript()
     );
+
+    let reopened = Child::spawn(Role::VerifyIndex, &path, PER_CYCLE).finish();
+    reopened.assert_exited_cleanly().report();
+    assert_eq!(
+        reopened.get("has_index"),
+        "true",
+        "the index createIndexes reported building is not in the catalog\n{}",
+        reopened.transcript()
+    );
+    assert_eq!(
+        reopened.all("indexed_plan").len(),
+        SAMPLED_BUCKETS.len(),
+        "the reopen reported {} access paths, not the {} it samples\n{}",
+        reopened.all("indexed_plan").len(),
+        SAMPLED_BUCKETS.len(),
+        reopened.transcript()
+    );
+    assert!(
+        reopened
+            .all("indexed_plan")
+            .iter()
+            .all(|plan| plan == "INDEXED"),
+        "the index built on a reopened database is not used to answer queries\n{}",
+        reopened.transcript()
+    );
+    assert_eq!(reopened.get("valid"), "true", "{}", reopened.transcript());
 }
 
-/// A defect, pinned rather than blessed — and the most damaging one here.
+/// The one that matters most: a write into a collection loaded from disk maintains its indexes.
 ///
-/// A write into a collection loaded from disk updates no index, `_id_` included, because
-/// `IndexCatalog::init()` never ran for it. Nothing reports a problem: the insert is
-/// acknowledged, the document is readable by collection scan, and `validate` cannot see it
-/// because on a reopened database it validates zero indexes.
-///
-/// The probe demands the one thing a working `_id_` index cannot allow. It writes a document,
-/// then writes the *same* `_id` again — and the engine takes it, leaving two documents with one
-/// `_id` in a collection where that is supposed to be unrepresentable. Unlike everything else
-/// in this file, this damage is written to disk and outlives the fix.
+/// It used to maintain none of them, `_id_` included, while the durable catalog still advertised
+/// `_id_` as ready — so the engine accepted two documents with the same `_id` and wrote that to
+/// disk. The probe demands the thing a working `_id_` index cannot allow, and now asserts it is
+/// refused: the write is visible through the index, and the duplicate comes back as error 11000.
 #[test]
-fn writes_to_a_reopened_collection_bypass_the_id_index() {
+fn writes_to_a_reopened_collection_go_through_the_id_index() {
     let directory = scratch::directory();
     let path = directory.path().join("database");
     Child::spawn(Role::ReopenCycles, &path, 1)
@@ -166,23 +189,33 @@ fn writes_to_a_reopened_collection_bypass_the_id_index() {
     written.assert_exited_cleanly().report();
 
     assert_eq!(
+        written.get("id_plan"),
+        "INDEXED",
+        "an _id lookup after a reopen was answered by a collection scan\n{}",
+        written.transcript()
+    );
+    assert_eq!(
+        written.number("through_id_index"),
+        written.number("through_scan"),
+        "the _id index and a collection scan disagree about the document just written\n{}",
+        written.transcript()
+    );
+    assert_eq!(
         written.get("duplicate"),
-        "accepted",
-        "the unique _id index rejected a duplicate after a reopen — THE ENGINE HAS BEEN FIXED; \
-         make this probe assert that the duplicate is refused with error 11000\n{}",
+        "error",
+        "the unique _id index accepted a duplicate _id\n{}",
+        written.transcript()
+    );
+    assert_eq!(
+        written.get("duplicate_code"),
+        DUPLICATE_KEY,
+        "the duplicate _id was refused, but not as a duplicate key error\n{}",
         written.transcript()
     );
     assert_eq!(
         written.number("total"),
-        PER_CYCLE + 2,
-        "both copies of the duplicate _id should be in the collection\n{}",
-        written.transcript()
-    );
-    assert_eq!(
-        written.get("id_plan"),
-        "COLLSCAN",
-        "an _id lookup used the _id index after a reopen — THE ENGINE HAS BEEN FIXED; make \
-         this probe assert that a write is visible through the index\n{}",
+        PER_CYCLE + 1,
+        "the refused duplicate left a second copy in the collection\n{}",
         written.transcript()
     );
 }

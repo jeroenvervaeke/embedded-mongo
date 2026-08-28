@@ -74,14 +74,13 @@ fn unjournalled_writes_older_than_the_flush_interval_survive_sigkill() {
     );
 }
 
-/// `listCollections` is deliberately not checked here: it comes back empty after *any* reopen,
-/// crash or not, which `reopened::the_collection_catalog_is_not_listable_after_reopening`
-/// pins. What this probe wants to know is whether the kill damaged the catalog, and the index
-/// catalog and `validate` answer that without going through the broken listing.
+/// Whether the kill damaged the catalog. All three routes into it have to agree that the
+/// collection is intact: it is listed, it has its `_id_` index, and `validate` finds no errors.
 #[test]
 fn catalog_survives_sigkill_during_insert() {
     let reopened = kill_during_insert(Role::Insert, ACKS_BEFORE_KILL, PAST_THE_FLUSH);
 
+    assert_eq!(reopened.get("collections"), "records");
     assert_eq!(reopened.get("indexes"), "_id_");
     assert_eq!(reopened.get("validation_errors"), "");
 }
@@ -104,10 +103,9 @@ fn journalled_writes_survive_sigkill() {
 
 /// The documents have to be all there and undamaged, whatever became of the index.
 ///
-/// `validate` is worth less here than it reads: on a reopened database it reports
-/// `nIndexes: 0`, so it checks the records and no index at all, and its warnings show it does
-/// not always finish even that. The document count is the assertion doing the work — the load
-/// journals its last batch, so all of them were durable before the build started.
+/// The load journals its last batch, so every document was durable before the build started;
+/// none of them may go missing because the build that was reading them was killed. `validate`
+/// runs over the `_id_` index that survives, so it is checking something real here.
 #[test]
 fn documents_survive_sigkill_during_index_build() {
     let reopened = kill_during_index_build();
@@ -125,15 +123,23 @@ fn documents_survive_sigkill_during_index_build() {
 /// The question this probe exists for: can a killed build leave an index that is half-built and
 /// still used to answer queries — returning fewer documents than are really there?
 ///
-/// It cannot, and not because the build is careful. `listIndexes` does report `k_1` after the
-/// kill, but on a reopened database the engine will not read it: the planner picks a collection
-/// scan, and `hint` on the index is refused outright. So no query can be answered from whatever
-/// entries the build left behind. That is the guarantee, and it is a side effect of the defect
-/// `reopened::secondary_indexes_are_unusable_after_reopening` pins — if that defect is fixed,
-/// this probe has to become the count comparison it looks like.
+/// It cannot, because the entries never survive the next open. `createIndexes` here is a
+/// single-phase build, so an unfinished one is recorded in the durable catalog with no build
+/// UUID, and `catalog_repair::reconcileCatalogAndIdents` drops both the catalog entry and its
+/// table during startup. `listIndexes` therefore reports only `_id_`, the planner has nothing
+/// to reach for, and a hint onto the vanished index is refused. The caller has to reissue the
+/// `createIndexes` — which `reopened::an_index_can_be_created_on_a_reopened_database` shows
+/// works — rather than silently inheriting a partial index.
 #[test]
 fn no_query_is_answered_from_the_index_a_killed_build_left() {
     let reopened = kill_during_index_build();
+
+    assert_eq!(
+        reopened.get("indexes"),
+        "_id_",
+        "the index a killed build left was kept instead of being dropped at startup\n{}",
+        reopened.transcript()
+    );
 
     // The counts first, not just the predicates: `all` answers an empty slice for a key that
     // was never reported, and every predicate below is true of an empty slice.

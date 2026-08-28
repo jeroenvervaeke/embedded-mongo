@@ -44,6 +44,14 @@ pub fn variant(error: &Error) -> &'static str {
 pub fn report_error(key: &str, error: &Error) {
     result(key, "error");
     result(&format!("{key}_variant"), variant(error));
+    // Reported separately from the message so a probe can assert on the code the server chose
+    // rather than on the prose around it, which MongoDB is free to reword.
+    if let Error::Server {
+        code: Some(code), ..
+    } = error
+    {
+        result(&format!("{key}_code"), code);
+    }
     result(&format!("{key}_message"), error);
 }
 
