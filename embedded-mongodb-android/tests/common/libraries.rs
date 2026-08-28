@@ -14,7 +14,7 @@ use std::time::SystemTime;
 /// because which of the two cargo relinks first depends on the command that was run.
 pub fn bridge_libraries() -> Vec<PathBuf> {
     let mut libraries = vec![probe_library()];
-    let shipped = profile_dir().join("libembedded_mongodb_android.so");
+    let shipped = profile_dir().join(cdylib("embedded_mongodb_android"));
     match (modified(&shipped), newest_source()) {
         (Some(built), Some(edited)) if built >= edited => libraries.push(shipped),
         (Some(_), Some(_)) => println!(
@@ -73,7 +73,7 @@ fn modified(path: &Path) -> Option<SystemTime> {
 /// real one, which is exactly how a fixed bug went on looking fixed here. Since this is the
 /// only library the tests are guaranteed to have, a stale one makes the whole run worthless.
 pub fn probe_library() -> PathBuf {
-    let probe = profile_dir().join("examples").join("libjni_probe.so");
+    let probe = profile_dir().join("examples").join(cdylib("jni_probe"));
     assert!(
         probe.is_file(),
         "{} was not built. `cargo test -p embedded-mongodb-android` and \
@@ -94,6 +94,20 @@ pub fn probe_library() -> PathBuf {
         probe.display()
     );
     probe
+}
+
+/// What cargo will have called a `cdylib` on this platform.
+///
+/// Spelled out rather than hardcoded because macOS gets `libfoo.dylib` where Linux gets
+/// `libfoo.so`, and a literal `.so` here looks for a file cargo never wrote -- which reads
+/// as "the library was not built" on a machine where it was. The engine's own library is not
+/// a cargo artifact and keeps its `.so` name everywhere, so `native_library` still spells it.
+fn cdylib(stem: &str) -> String {
+    format!(
+        "{}{stem}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    )
 }
 
 /// The directory cargo put this test binary's libraries in: `target/<profile>`, or
