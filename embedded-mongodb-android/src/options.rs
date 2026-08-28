@@ -19,6 +19,15 @@
 //! Zero is "the engine's default" in every slot, exactly as in the C struct, which is what
 //! lets an unset limit stay unset the whole way down rather than being answered with a number
 //! restated here.
+//!
+//! A slot past the end of what this build reads is ignored rather than refused, which means a
+//! caller newer than the library it is loaded against is told its limit was applied when it was
+//! not. That is deliberate, and it is the C struct's rule rather than one invented here --
+//! `requested()` in `engine_options.cpp` copies `min(options->size, sizeof(copy))` and never
+//! looks at the rest. Making this layer stricter would put the two contracts out of step, which
+//! costs more than it buys while the Kotlin classes and this library ship in one AAR and cannot
+//! be skewed. If they are ever published apart, refusing a non-zero unknown slot is the change
+//! to make, and it belongs in both layers at once.
 
 use embedded_mongodb::{CacheSize, JournalFileSize, OpenOptions, OutOfRange, Preallocation};
 use jni::sys::jlong;
@@ -189,8 +198,10 @@ mod tests {
     /// number.
     #[test]
     fn a_slot_java_could_hold_but_the_limit_could_not_is_refused_by_name() {
-        for slot in [-1, i64::from(u32::MAX) + 1, jlong_max()] {
-            let error = open_options([slot, 0, 0]).expect_err("{slot} is not a cache size");
+        for slot in [-1, i64::from(u32::MAX) + 1, i64::MAX] {
+            let Err(error) = open_options([slot, 0, 0]) else {
+                panic!("{slot} is not a cache size and has to be refused");
+            };
 
             assert_eq!(error.code(), ErrorCode::InvalidArgument);
             assert!(
@@ -214,9 +225,5 @@ mod tests {
             PreallocationSlot::read(2).map(PreallocationSlot::requested),
             Ok(Some(Preallocation::Disabled))
         );
-    }
-
-    fn jlong_max() -> i64 {
-        i64::MAX
     }
 }

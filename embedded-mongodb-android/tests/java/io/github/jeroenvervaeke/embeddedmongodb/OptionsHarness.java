@@ -50,6 +50,11 @@ public final class OptionsHarness {
     /** Small enough to be cleared on any machine that can run this suite at all. */
     private static final long REACHABLE_FLOOR_MEBIBYTES = 32;
 
+    /** Long enough that a loaded machine cannot mistake a slow log server thread for a failure. */
+    private static final long PATIENCE_NANOS = 60L * 1000 * 1000 * 1000;
+
+    private static final long POLL_MILLIS = 50;
+
     private static final String DATABASE = "probe";
 
     private static final String COLLECTION = "places";
@@ -154,15 +159,54 @@ public final class OptionsHarness {
         byte[] cache = Bson.subDocumentOf(wiredTiger, "cache");
         byte[] log = Bson.subDocumentOf(wiredTiger, "log");
 
+        // Both of these are published by __logmgr_config and __wt_cache_config while the
+        // connection is opening, so they are settled by the time any command can run.
         equal(Bson.number(cache, "maximum bytes configured"), CACHE_MEBIBYTES * MEBIBYTE,
                 "the cache ceiling");
         equal(Bson.number(log, "maximum log file size"), JOURNAL_KIBIBYTES * 1024,
                 "the journal file size");
-        // The count WiredTiger was configured with, not one it has reached, so this is settled
-        // the moment the engine is up rather than whenever the log server thread next runs.
-        equal(Bson.number(log, "number of pre-allocated log files to create"), 1,
-                "journal pre-allocation");
-        System.out.println("PASS every limit reached WiredTiger");
+        System.out.println("PASS the cache and journal limits reached WiredTiger");
+        preallocationReachedWiredTiger(handle);
+    }
+
+    /**
+     * Pre-allocation is the one limit that is not settled when the engine comes up. WiredTiger
+     * publishes this count from __log_prealloc_once, which only the log server thread runs, so it
+     * reads 0 until that thread's first pass -- waited for rather than asserted outright. And it
+     * is a lower bound rather than an equality because the same function raises the count when the
+     * writing thread had to allocate a file for itself.
+     */
+    private static void preallocationReachedWiredTiger(long handle) {
+        long deadline = System.nanoTime() + PATIENCE_NANOS;
+        double reported;
+        do {
+            reported = Bson.number(logStatistics(handle),
+                    "number of pre-allocated log files to create");
+            if (reported >= 1) {
+                System.out.println("PASS journal pre-allocation reached WiredTiger: "
+                        + (long) reported);
+                return;
+            }
+            pause();
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("journal pre-allocation never reached WiredTiger; the count "
+                + "WiredTiger reports is still " + (long) reported);
+    }
+
+    private static byte[] logStatistics(long handle) {
+        return Bson.subDocumentOf(Bson.subDocumentOf(
+                run(handle, "admin", Bson.document(Bson.int32("serverStatus", 1))), "wiredTiger"),
+                "log");
+    }
+
+    private static void pause() {
+        try {
+            Thread.sleep(POLL_MILLIS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while waiting for the log server thread",
+                    interrupted);
+        }
     }
 
     /**

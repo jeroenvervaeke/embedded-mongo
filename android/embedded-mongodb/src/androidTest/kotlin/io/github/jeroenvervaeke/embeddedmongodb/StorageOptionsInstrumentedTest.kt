@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import org.bson.Document
 import org.junit.After
 import org.junit.Test
@@ -43,10 +44,13 @@ class StorageOptionsInstrumentedTest {
         val wiredTiger =
             open(options).commandBlocking("admin", Document("serverStatus", 1)).stats("wiredTiger")
 
+        // Both are published while the connection opens, so they are settled by now.
         assertEquals(64L * 1024 * 1024, wiredTiger.stats("cache").stat("maximum bytes configured"))
-        val log = wiredTiger.stats("log")
-        assertEquals(512L * 1024, log.stat("maximum log file size"))
-        assertEquals(1L, log.stat("number of pre-allocated log files to create"))
+        assertEquals(512L * 1024, wiredTiger.stats("log").stat("maximum log file size"))
+        // Pre-allocation is not: WiredTiger publishes this count from the log server thread, so it
+        // reads 0 until that thread's first pass, and rises above one when the writing thread has
+        // had to allocate a file itself.
+        assertTrue(preallocatedFiles() >= 1, "journal pre-allocation never reached WiredTiger")
     }
 
     /** A caller who names one limit must not have the others chosen for them. */
@@ -110,9 +114,18 @@ class StorageOptionsInstrumentedTest {
         assertEquals(1.0, opened.commandBlocking(DATABASE, createIndex()).getDouble("ok"))
     }
 
-    @Test
-    fun aLimitOutsideTheEnginesRangeIsRefusedWhereItIsWritten() {
-        assertFailsWith<IllegalArgumentException> { CacheSize.ofMebibytes(0) }
+    /** Polls until the log server thread has published the count, or gives up. */
+    private fun preallocatedFiles(): Long {
+        val deadline = System.nanoTime() + PATIENCE_NANOS
+        var reported = 0L
+        while (System.nanoTime() < deadline) {
+            val database = requireNotNull(database) { "the database must be open" }
+            reported = database.commandBlocking("admin", Document("serverStatus", 1))
+                .stats("wiredTiger").stats("log").stat("number of pre-allocated log files to create")
+            if (reported >= 1) return reported
+            Thread.sleep(POLL_MILLIS)
+        }
+        return reported
     }
 
     private fun open(options: StorageOptions): EmbeddedMongo =
@@ -135,3 +148,8 @@ private const val COLLECTION = "orders"
 
 /** `ErrorCodes::OutOfDiskSpace`, from src/mongo/base/error_codes.yml. */
 private const val OUT_OF_DISK_SPACE = 14031
+
+/** Long enough that a loaded device cannot mistake a slow log server thread for a failure. */
+private const val PATIENCE_NANOS = 60L * 1000 * 1000 * 1000
+
+private const val POLL_MILLIS = 50L

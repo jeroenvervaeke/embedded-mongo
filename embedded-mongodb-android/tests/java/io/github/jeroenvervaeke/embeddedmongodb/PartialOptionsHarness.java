@@ -60,6 +60,9 @@ public final class PartialOptionsHarness {
                     "the one limit the caller named");
             equal(Bson.number(log, "maximum log file size"), DEFAULT_JOURNAL_KIBIBYTES * 1024,
                     "the journal file size the caller left off the end");
+            // No race here, unlike the enabled case: with pre-allocation off the log server
+            // thread never calls __log_prealloc_once at all, so this statistic is never written
+            // and stays zero for the life of the engine.
             equal(Bson.number(log, "number of pre-allocated log files to create"),
                     DEFAULT_PREALLOCATED_FILES,
                     "the pre-allocation the caller left off the end");
