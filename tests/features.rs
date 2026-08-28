@@ -9,6 +9,9 @@
 //! One test function, not many: the engine is a process-global singleton, and `cargo test`
 //! would otherwise open several of them at once.
 
+#[path = "scratch/mod.rs"]
+mod scratch;
+
 use embedded_mongodb::{
     Client,
     bson::{Bson, Document, doc, oid::ObjectId},
@@ -46,15 +49,7 @@ const SECTIONS: &[Section] = &[
 
 #[test]
 fn engine_features_survive_the_build_cuts() {
-    // Under `target`, never the system temporary directory: that is a ramdisk on a good many
-    // Linux machines, and the engine preallocates a couple of hundred megabytes of WiredTiger
-    // journal for every data directory it opens, however few documents go in.
-    let base = env!("CARGO_TARGET_TMPDIR");
-    std::fs::create_dir_all(base).unwrap();
-    let temporary = tempfile::Builder::new()
-        .prefix("features-")
-        .tempdir_in(base)
-        .unwrap();
+    let temporary = scratch::directory("features-");
     let client = Client::new(temporary.path().join("database")).unwrap();
 
     for (name, section) in SECTIONS {
