@@ -15,7 +15,7 @@ For using the library, see the [README](README.md). For why the engine is the si
 
 | | |
 | --- | --- |
-| `EMBEDDED_MONGODB_NATIVE_LIB_DIR=<dir>` | Use `<dir>/libembedded_mongodb_native.so`, no questions asked. Emits a warning, because it outranks everything else with no checksum and no freshness check. |
+| `EMBEDDED_MONGODB_NATIVE_LIB_DIR=<dir>` | Use `<dir>/libembedded_mongodb_native.so`. Emits a warning, because it outranks everything else with no checksum and no commit comparison. Its entry points are still checked against `native/embedded_mongodb_native.h`. |
 | `EMBEDDED_MONGODB_BUILD_FROM_SOURCE=1` | Compile from the pinned submodule. Hours. |
 | *(default)* | Download the library published for this target and verify it. |
 
@@ -121,6 +121,32 @@ use a stale library, and `ci.yml`'s `prebuilt-freshness` job asks the same ones:
 Note that (2) is restricted to those paths — unrelated commits, docs and workflow changes do
 not invalidate a manifest. Note also that a *patched* submodule working tree is expected and
 is not treated as drift: applying the patches is a required step for a source build.
+
+**These three need history.** `SOURCE_COMMIT` has to be an object in your repository, so a
+shallow clone cannot answer any of them — every CI job here therefore checks out with
+`fetch-depth: 0`. A *shallow* clone that cannot reach `SOURCE_COMMIT` is a hard error naming
+`git fetch --unshallow`, not a warning: the run that made this a rule linked a library
+published before `embedded_mongodb_open_with_options` existed and failed several minutes
+later with `undefined symbol`, which named neither the cause nor the fix.
+
+A *complete* clone that does not hold `SOURCE_COMMIT` is a different thing — a complete clone
+of this repository always holds it, because the manifest naming it was committed on top of
+it. So that tree is not this project's history at all: a "use this template" copy, a fork
+whose history was rewritten, a tarball someone ran `git init` in. It gets a warning, because
+there is nothing for it to fetch.
+
+A tree with no repository at all — a published crate, a release tarball, `cargo vendor`
+output — is not even warned. Its sources and its manifest were published together, so there
+is no second history for it to have drifted from. What covers all of these is a fourth check
+that needs no git:
+
+4. does the library export every `EMBEDDED_MONGODB_API` function
+   `embedded-mongodb-sys/native/embedded_mongodb_native.h` declares?
+
+That one runs on every resolution path, in every tree, including a library named by
+`EMBEDDED_MONGODB_NATIVE_LIB_DIR`. It is coarser than the commit comparison — it sees an
+entry point that is missing, not one whose struct grew a field — which is why it is a floor
+under the other three rather than a replacement for them.
 
 ### How
 

@@ -1,12 +1,18 @@
-// Everything that decides what the native library contains. Split out from build.rs and
-// `include!`d by it, so that the staleness check in build.rs can watch exactly the inputs
-// the published library was built from: a fix to the downloader must not invalidate every
-// library already published, and a change to a Bazel flag must.
+// Everything that decides what the native library contains. Split out from build.rs so that
+// the staleness check can watch exactly the inputs the published library was built from: a
+// fix to the downloader must not invalidate every library already published, and a change to
+// a Bazel flag must.
+
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // The NDK toolchain and the API level it targets, which are part of the library's ABI.
-include!("build_android.rs");
+use crate::NATIVE_LIBRARY;
+use crate::build_android::AndroidNdk;
+use crate::build_logging::run_logged;
 
-fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
+pub(crate) fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     let mongo_root = workspace_root.join("mongo");
     assert!(
         mongo_root.join(".bazelversion").is_file(),
@@ -22,9 +28,8 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     // Android brings its own toolchain, so neither CC nor CXX from the environment has any
     // say in what compiles it.
-    let android = (target_os == "android").then(|| {
-        AndroidNdk::detect(&env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default())
-    });
+    let android = (target_os == "android")
+        .then(|| AndroidNdk::detect(&env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default()));
     // `mongo/.bazelrc` makes `compiler_type` a command-line flag alias, so the value passed
     // below outranks `common:macos --//bazel/config:compiler_type=clang`. Falling back to
     // "gcc" unconditionally therefore fed GCC-only flags into Apple clang.
@@ -48,7 +53,7 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
     // Under OUT_DIR so that `cargo clean` takes it with everything else and two profiles or
     // targets building at once cannot share one log. Handing this file to Bazel rather than
     // the pipes cargo supplies is what keeps a finished build from hanging cargo forever;
-    // `run_logged` in build.rs has the details.
+    // `run_logged` in build_logging.rs has the details.
     let log_path =
         PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR for build scripts"))
             .join("bazel-build.log");
