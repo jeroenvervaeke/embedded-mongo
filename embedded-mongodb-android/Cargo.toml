@@ -1,0 +1,23 @@
+[package]
+name = "embedded-mongodb-android"
+version = "0.1.0"
+edition = "2024"
+license = "SSPL-1.0"
+publish = false
+
+[lib]
+name = "embedded_mongodb_android"
+# `rlib` as well as `cdylib`: the host test suite and the panic probe below link the same
+# code the Android library exports, so what the tests exercise is what ships.
+crate-type = ["cdylib", "rlib"]
+
+# The shared library the JVM tests load: `cargo test` builds a package's `rlib` but not its
+# `cdylib`, and this links that same `rlib`. It also carries the deliberate panic, which keeps
+# a panic backdoor out of the library Android loads. See `examples/jni_probe.rs`.
+[[example]]
+name = "jni_probe"
+crate-type = ["cdylib"]
+
+[dependencies]
+embedded-mongodb-sys = { path = "../embedded-mongodb-sys" }
+jni = "0.22.4"

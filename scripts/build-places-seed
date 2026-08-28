@@ -1,0 +1,214 @@
+#!/bin/sh
+# Builds the gzipped BSON seed of coffee places that the demo app ships, straight from the
+# Overture Maps places theme on S3.
+#
+#   scripts/build-places-seed --region ireland [--release <version>] [--output-dir <dir>]
+#                             [--min-confidence <0..1>] [--expect-documents <n>|any]
+#
+# Writes <output-dir>/<region>.bson.gz -- a concatenated stream of BSON documents, the shape
+# mongodump produces -- beside <region>.attribution.txt and a licenses/ directory holding the
+# full text of every licence the data travels under. All of it is derived data, so it defaults
+# into .cache/ and never enters the repository.
+#
+# DuckDB reads the release's parquet over HTTP and only fetches the row groups the bounding
+# box predicate needs, so no local copy of the planet-wide dataset is required.
+#
+# The seed and its attribution are staged and then renamed into place together. The attribution
+# is the licensing obligation, so a seed that outlives the attribution describing it is a
+# compliance failure, not untidiness.
+set -eu
+
+region=
+release=2026-08-19.0
+output_dir=
+min_confidence=0
+expect_documents=
+
+usage='usage: build-places-seed --region <region> [--release <version>] [--output-dir <dir>] [--min-confidence <0..1>] [--expect-documents <n>|any]'
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        --region) region=${2:?--region needs a value}; shift 2 ;;
+        --release) release=${2:?--release needs a value}; shift 2 ;;
+        --output-dir) output_dir=${2:?--output-dir needs a value}; shift 2 ;;
+        --min-confidence) min_confidence=${2:?--min-confidence needs a value}; shift 2 ;;
+        --expect-documents) expect_documents=${2:?--expect-documents needs a value}; shift 2 ;;
+        *) echo "$usage" >&2; exit 2 ;;
+    esac
+done
+
+# One region is implemented. Adding another is a new case arm plus its bounding box and its
+# count: the category filter and the document shape are the same wherever coffee is sold.
+case $region in
+    ireland)
+        region_label='Ireland, including Northern Ireland'
+        xmin=-10.8; xmax=-5.3; ymin=51.3; ymax=55.5
+        : "${expect_documents:=5180}"
+        ;;
+    '') echo "--region is required" >&2; exit 2 ;;
+    *) echo "unknown region '$region'; known regions: ireland" >&2; exit 1 ;;
+esac
+
+case $expect_documents in
+    any) ;;
+    ''|*[!0-9]*) echo "--expect-documents takes a document count or 'any', got '$expect_documents'" >&2; exit 2 ;;
+esac
+
+command -v duckdb >/dev/null || { echo "duckdb is not installed" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "python3 is not installed" >&2; exit 1; }
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+pinned_licenses="$repo_root/scripts/places-licenses"
+: "${output_dir:="$repo_root/.cache/places"}"
+mkdir -p "$output_dir"
+seed="$output_dir/$region.bson.gz"
+attribution="$output_dir/$region.attribution.txt"
+licenses="$output_dir/licenses"
+extracted=$(date -u +%Y-%m-%d)
+
+work=$(mktemp -d)
+# Staged on the output filesystem so publishing is a rename rather than a copy, which is what
+# makes the seed and its attribution land together.
+staging=$(mktemp -d "$output_dir/.build-XXXXXX")
+trap 'rm -rf "$work" "$staging"' EXIT
+
+# Only the columns the demo app reads. A row with no name or no geometry is useless to a
+# finder that both lists and maps its results, so those are dropped here rather than in the
+# encoder. ORDER BY id makes a re-run of the same release byte-identical.
+#
+# operating_status is deliberately not filtered on: Overture leaves it NULL for every place in
+# this extent, so a predicate on it would drop the whole extract rather than the closed places.
+# confidence is left to --min-confidence, defaulting to 0, because how much of Overture's
+# low-confidence tail to trust is the app's call and re-extracting to change it costs a
+# round trip to S3 -- the value ships on every document so the app can also filter at query
+# time.
+#
+# The predicate reads bbox.xmin/ymin rather than the full box because every place is a point,
+# where the bounding box collapses to its corner: xmin == xmax and ymin == ymax.
+cat > "$work/extract.sql" <<SQL
+INSTALL httpfs; LOAD httpfs;
+INSTALL spatial; LOAD spatial;
+SET s3_region='us-west-2';
+COPY (
+    SELECT
+        id,
+        names.primary AS name,
+        categories.primary AS cat,
+        brand.names.primary AS brand,
+        confidence,
+        addresses[1].freeform AS addr_street,
+        addresses[1].locality AS addr_locality,
+        addresses[1].postcode AS addr_postcode,
+        addresses[1].region AS addr_region,
+        ST_X(geometry) AS lon,
+        ST_Y(geometry) AS lat
+    FROM read_parquet('s3://overturemaps-us-west-2/release/$release/theme=places/type=place/*')
+    WHERE bbox.xmin BETWEEN $xmin AND $xmax
+      AND bbox.ymin BETWEEN $ymin AND $ymax
+      AND categories.primary IN ('cafe', 'coffee_shop', 'cafeteria', 'coffee_roastery')
+      AND names.primary IS NOT NULL
+      AND geometry IS NOT NULL
+      AND confidence >= $min_confidence
+    ORDER BY id
+) TO '$work/places.ndjson' (FORMAT JSON);
+SQL
+
+echo "extracting $region from Overture $release ..."
+duckdb -c ".read $work/extract.sql"
+
+documents=$(python3 "$repo_root/scripts/places-bson-encode.py" "$work/places.ndjson" "$work/places.bson")
+
+# A partial S3 read yields a smaller seed and a self-consistent attribution reporting the wrong
+# count, and would otherwise exit 0. A silently truncated dataset that looks successful is the
+# worst outcome available here, so the count is checked before anything is published.
+if [ "$expect_documents" != any ] && [ "$documents" -ne "$expect_documents" ]; then
+    echo "extracted $documents documents, expected $expect_documents" >&2
+    echo "if the upstream release really changed, re-run with --expect-documents $documents" >&2
+    exit 1
+fi
+[ "$documents" -gt 0 ] || { echo "the extract is empty; check the release and the bounding box" >&2; exit 1; }
+
+# Licences are installed before the seed is published, so a seed can never exist beside a
+# missing licence text. They are static, so this is a refresh rather than a swap.
+mkdir -p "$licenses"
+for name in SOURCES $(awk -F'\t' '!/^#/ && NF { print $1 }' "$pinned_licenses/SOURCES"); do
+    cp "$pinned_licenses/$name" "$licenses/$name"
+    [ -s "$licenses/$name" ] || { echo "licence text $name is empty" >&2; exit 1; }
+done
+
+# Read the copyright out of the pinned NOTICE rather than repeating a year here: Foursquare
+# has already moved it once, and a hardcoded one goes stale silently.
+foursquare_copyright=$(sed -n '/Foursquare Labs/{p;q;}' "$pinned_licenses/NOTICE.txt")
+[ -n "$foursquare_copyright" ] || { echo "no copyright line in $pinned_licenses/NOTICE.txt" >&2; exit 1; }
+
+# -n keeps the source name and mtime out of the header, so re-running against the same
+# release reproduces the seed byte for byte.
+gzip -9 -n -c "$work/places.bson" > "$staging/seed"
+
+cat > "$staging/attribution" <<TEXT
+Overture Maps places -- $region_label
+======================================================================
+
+Source      Overture Maps Foundation, overturemaps.org
+Release     $release
+Theme/type  places / place
+Extracted   $extracted (UTC)
+Extent      longitude $xmin..$xmax, latitude $ymin..$ymax
+Categories  cafe, coffee_shop, cafeteria, coffee_roastery
+Documents   $documents
+
+Licensing
+---------
+The places theme contains no OpenStreetMap data and therefore carries no
+share-alike obligation. Its contributing datasets, per
+https://docs.overturemaps.org/attribution/ (read $extracted), are:
+
+  Meta, Microsoft, PinMeTo, Krick, RenderSEO, DAC, BrightQuery
+      Community Data License Agreement -- Permissive, Version 2.0
+  Foursquare
+      Apache License 2.0, plus the NOTICE reproduced in licenses/NOTICE.txt
+  AllThePlaces
+      CC0 1.0 Universal
+
+The full text of each licence is in licenses/ beside this file, because naming
+a licence does not satisfy it: CDLA-Permissive-2.0 section 2.1 requires the
+agreement text to travel with the data, and the Foursquare NOTICE requires both
+a copy of Apache 2.0 and its own full content. CC0 1.0 imposes no condition, so
+AllThePlaces needs nothing beyond the credit above.
+
+Attribution
+-----------
+Overture invites a citation rather than requiring one. Their wording is that
+you "may choose to add the following citation, including the date the data
+were accessed":
+
+  Overture Maps Foundation, overturemaps.org.
+  Release $release, accessed $extracted.
+
+The Foursquare notice is not optional. Apache License 2.0 and the NOTICE
+itself require redistribution to preserve its full content and to ship a copy
+of the licence, both of which are in licenses/:
+
+  $foursquare_copyright
+
+Modifications
+-------------
+Foursquare's data was transformed into the Overture schema by the Overture Maps
+Foundation, who record that change as 2026-03-18. This extract makes two
+further changes. It keeps only places whose primary category is one of the
+categories named above, that fall inside the extent named above, that carry a
+name and a geometry, and whose confidence is at least $min_confidence. It then
+reshapes each record to _id, name, cat, brand, confidence, addr and a GeoJSON
+loc point, dropping every other Overture column.
+TEXT
+
+# Both files exist in full before either is published, so the pair is replaced together.
+mv -f "$staging/seed" "$seed"
+mv -f "$staging/attribution" "$attribution"
+
+raw_bytes=$(wc -c < "$work/places.bson")
+seed_bytes=$(wc -c < "$seed")
+echo "documents:   $documents"
+echo "raw bson:    $raw_bytes bytes"
+echo "seed:        $seed ($seed_bytes bytes)"
+echo "attribution: $attribution"
+echo "licenses:    $licenses"

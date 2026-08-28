@@ -1,0 +1,211 @@
+# embedded-mongodb-android
+
+The Android library: MongoDB running inside the application process, with no server, no socket
+and no `mongod` to install. It wraps the `embedded-mongodb-android` Rust crate in a Kotlin API and
+packages both into an AAR.
+
+The Kotlin side is a thin one. The engine speaks the same command language as a server, so the API
+is commands in, replies out, plus the paging a cursor needs.
+
+```kotlin
+// Inside a coroutine: opening, running a command and collecting all suspend, and all three run
+// on the library's own database thread rather than on the caller's.
+val database = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
+
+database.command("shop", Document("insert", "orders").append("documents", listOf(order)))
+
+database.documents("shop", Document("find", "orders").append("filter", Document("paid", true)))
+    .collect(::render)
+```
+
+An instance is meant to outlive a single screen — open it once, keep it for as long as the data is
+in use, and `close()` it off the main thread when it is not.
+
+## What is in the AAR
+
+Three shared libraries per ABI:
+
+| | |
+| --- | --- |
+| `libembedded_mongodb_android.so` | the JNI bridge, built from `embedded-mongodb-android` |
+| `libembedded_mongodb_native.so` | the engine, downloaded by the sys crate's build script |
+| `libc++_shared.so` | the NDK's C++ runtime, taken from the NDK sysroot |
+
+The third is not optional. The engine links its own C++ runtime statically, but the `cxx` bridge
+compiled into the Rust crate uses the NDK's shared one, as any other NDK library would, and without
+it `System.loadLibrary` fails on the device.
+
+`arm64-v8a` and `x86_64`, and nothing else: MongoDB has no 32-bit build, so a 32-bit install would
+be a crash rather than a slower database. `abiFilters` names both, the Gradle task builds only
+those two, and it reads the ELF header of every library it stages — a 32-bit or wrong-architecture
+library fails the build rather than reaching a device.
+
+The engine is most of the download. Applications that ship both ABIs should use an app bundle, so
+Google Play delivers one.
+
+## Using it from an application
+
+The AAR is not published to a repository yet, so an application consumes the module itself —
+`includeBuild` this directory, or copy `embedded-mongodb-release.aar` into the application's
+`libs/`:
+
+```kotlin
+dependencies {
+    implementation(project(":embedded-mongodb"))
+}
+
+android {
+    defaultConfig {
+        minSdk = 24
+
+        // Only if the application ships other native code: an AAR's ABI list does not reach the
+        // application's, so an unrelated 32-bit library would produce an armeabi-v7a split that
+        // installs without an engine to load.
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
+    }
+}
+```
+
+`minSdk` 24 is the floor: the published libraries are compiled against bionic at API level 24.
+
+One database is open per process. The engine refuses a second runtime, so an application keeps
+one `EmbeddedMongo` and uses database names inside it, exactly as it would against a server.
+
+`org.mongodb:bson` and `kotlinx-coroutines-core` arrive transitively, because `Document` and `Flow`
+are in the API. The MongoDB Java driver is deliberately not a dependency — there is no server to
+connect to, and its connection pooling, topology monitoring and retry machinery have nothing to do.
+
+### Turn off backup for the database directory
+
+This is the one thing an application **must** do. With the default `allowBackup="true"`, Android
+uploads application-private files to the user's Google Drive and restores them onto whatever device
+and whatever build of the application comes next. A restored database is a WiredTiger data
+directory written by a different engine build on a different machine, which is a corrupt database
+rather than a migrated one.
+
+Either turn backup off entirely:
+
+```xml
+<application android:allowBackup="false" />
+```
+
+or keep it and exclude the directory the database lives in — both files, because the format
+changed in API 31:
+
+```xml
+<application
+    android:dataExtractionRules="@xml/data_extraction_rules"
+    android:fullBackupContent="@xml/backup_rules" />
+```
+
+```xml
+<!-- res/xml/data_extraction_rules.xml, API 31 and above -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="shop" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="shop" />
+    </device-transfer>
+</data-extraction-rules>
+```
+
+```xml
+<!-- res/xml/backup_rules.xml, API 30 and below -->
+<full-backup-content>
+    <exclude domain="file" path="shop" />
+</full-backup-content>
+```
+
+`path` is relative to `context.filesDir` for `domain="file"`, so `shop` above is the directory in
+the example at the top. Name whichever directory you passed to `EmbeddedMongo.open`.
+
+### R8 and minified builds
+
+Nothing to do: the AAR carries `consumer-rules.pro`. It keeps the JNI entry points, which R8 would
+otherwise rename into an `UnsatisfiedLinkError`, and the BSON codec classes, which are found
+reflectively and would otherwise be stripped.
+
+## Threads
+
+The engine runs every command on one internal strand, so the library dispatches onto a single
+thread of its own rather than a pool: a second thread would only queue behind the first.
+
+- `command`, `documents` and `EmbeddedMongo.open` are suspending and run there.
+- `commandBlocking`, `cursor` and `openBlocking` run on the calling thread and **throw** on
+  Android's main thread. A query over a few thousand documents outlasts the ANR budget, and neither
+  the engine nor JNI can interrupt one.
+- `close` warns instead of throwing, because closing from a lifecycle callback is reasonable and an
+  exception thrown out of `use { }` would replace whatever sent the caller there.
+
+A `DocumentCursor` that is not read to the end must be closed — `use { }` does it — or the engine
+keeps holding the cursor. Collecting `documents` handles that on its own, cancellation included.
+
+Failed commands are exceptions: `EmbeddedMongoException` carries the reply's `errmsg` and `code`.
+A reply with `ok: 0`, a populated `writeErrors`, or a `writeConcernError` all raise it, so an insert
+that stored nothing cannot read as a success.
+
+`code` says where the failure came from. A positive number is a MongoDB error code. A negative one
+is the bridge itself, and `EmbeddedMongoException.bridgeError` names it — `UNKNOWN_HANDLE` for a
+database that is already closed, `PANIC` for a Rust panic caught at the boundary, `ENGINE_ERROR`
+for an engine failure that carried no number. Zero means this library raised the failure, which it
+does for a reply it cannot parse.
+
+## Durability
+
+Writes are journalled before they are acknowledged. MongoDB's own default acknowledges a write as
+soon as it is in memory, which on a platform that ends processes without warning loses the last
+few hundred writes — and an insert that implicitly created a collection can take the collection
+with it. So a write command that names no `writeConcern` is sent with `{w: 1, j: true}`; a caller
+who wants the faster, lossy behaviour puts their own `writeConcern` in the command.
+
+Two limits of the engine are worth knowing before an application leans on them, both being worked
+on elsewhere in this repository:
+
+- Secondary indexes do not survive reopening the database — queries fall back to a collection scan,
+  and `createIndexes` on a reopened database ends the process rather than returning an error.
+- `listCollections` reports nothing on a reopened database, so it cannot be used to decide anything.
+
+A volume with a few hundred megabytes free is a precondition, not a suggestion: the engine refuses
+to open below roughly 500 MB, and a volume that fills up under a running engine ends the process
+outright rather than failing a command. `EmbeddedMongo.open(context, directory)` checks first and
+throws `InsufficientStorageException`, which carries how much room there is and how much is
+wanted; the overload without a `Context` cannot ask, so prefer the one with it. The measurement is
+`StorageManager.getAllocatableBytes`, which counts the cached data Android will delete for the
+application — `allocateBytes` will reclaim it rather than merely count it. It answers for the
+application rather than for the volume, so the floor it is held to is lower than the engine's own:
+this check is there to catch a device with nothing left, not to second-guess the engine.
+
+## Building this module
+
+```sh
+./gradlew build                            # AAR, unit tests, build logic tests, lint
+./gradlew :embedded-mongodb:testDebugUnitTest
+./gradlew :embedded-mongodb:connectedDebugAndroidTest   # needs a 64-bit device or emulator
+```
+
+The build needs:
+
+- **JDK 21.** `gradle/gradle-daemon-jvm.properties` asks for it, and Gradle fails with a clear
+  message when it finds none. Android Studio's bundled runtime qualifies; point Gradle at a JDK
+  it does not discover on its own with `org.gradle.java.installations.paths` in
+  `~/.gradle/gradle.properties`.
+- **The Android SDK**, through `ANDROID_HOME` or `sdk.dir` in `local.properties`, with the NDK
+  version pinned in `embedded-mongodb/build.gradle.kts`: `sdkmanager "ndk;<version>"`. The engine
+  needs r27 or newer.
+- **Rust**, with `rustup target add aarch64-linux-android x86_64-linux-android`. `cargo-ndk` is not
+  used: the `cargoJniLibs` task passes the NDK's compiler, archiver and linker to cargo itself,
+  which is the same set of variables the [root README](../README.md) documents.
+
+`cargoJniLibs` is wired into the AAR through the variant's `jniLibs`, so the libraries cannot go
+missing from a build that succeeds. It reruns when the Rust crates or the workspace lockfile
+change, and is skipped otherwise.
+
+Instrumented tests need a 64-bit image, and an image recent enough to be given a CPU model with
+BMI1 and BMI2: the engine's x86_64 build uses those instructions, and an older emulator dies with
+`SIGILL` inside `System.loadLibrary`. API 35 is what CI runs; `-qemu -cpu host` is the way out on
+an older one.
+
+CI runs all of it — `./gradlew build` and the instrumented tests on an API 35 emulator — in the
+`android` job of [`ci.yml`](../.github/workflows/ci.yml). It installs the NDK version read out of
+`embedded-mongodb/build.gradle.kts`, so bumping the pin there is all it takes to move CI too.

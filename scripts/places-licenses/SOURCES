@@ -1,0 +1,13 @@
+# Provenance of the licence texts shipped beside every Overture places seed.
+# scripts/build-places-seed copies this whole directory next to the seed, because
+# CDLA-Permissive-2.0 section 2.1 and the Foursquare NOTICE both require the text to travel
+# with the data -- naming the licence is not enough.
+#
+# The texts are pinned rather than fetched at build time: they are legal documents that must be
+# reviewable in version control, and a seed build must not depend on three more hosts being up.
+# Refresh a text by re-fetching its URL and updating the retrieved date on the same row.
+#
+# file	url	retrieved
+Apache-2.0.txt	https://www.apache.org/licenses/LICENSE-2.0.txt	2026-08-27
+CDLA-Permissive-2.0.txt	https://raw.githubusercontent.com/spdx/license-list-data/main/text/CDLA-Permissive-2.0.txt	2026-08-27
+NOTICE.txt	https://opensource.foursquare.com/places-notice-txt/	2026-08-27

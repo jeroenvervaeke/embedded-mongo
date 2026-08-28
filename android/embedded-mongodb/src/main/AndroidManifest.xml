@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The library declares nothing: it needs no permission, no component and no feature. Its data
+  lives in the directory the application hands to EmbeddedMongo, which is application-private
+  storage, and it opens no sockets.
+-->
+<manifest />
