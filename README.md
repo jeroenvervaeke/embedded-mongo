@@ -148,6 +148,59 @@ let item = items.find_one(doc! { "_id": inserted.inserted_id })?;
 println!("{item:?}");
 ```
 
+### Storage limits
+
+mongod sizes its journal, its cache and its free-space floors for a server. The journal is the
+one that is badly wrong inside a phone application: at mongod's settings an Ireland-scale
+directory holding **2.25 MiB** of documents and indexes occupies **202 MiB**, because two
+journal files are allocated in full whether or not anything is written to them. This engine
+defaults to one 8 MiB journal file and no pre-allocated spare, which takes the same directory
+to **10.25 MiB**. Cold open gets faster too, because recovery scans the journal at startup and
+there is 25x less of it to scan.
+
+Journalling itself is untouched: the files are smaller and there is one rather than two, but
+every write is logged and fsynced exactly as before. `tests/durability` passes in full, and the
+two properties it exists to pin are unchanged — a write acknowledged under `{w:1, j:true}`
+survives `SIGKILL` (zero lost, measured), and recovery replays a strict prefix of the write
+history rather than a torn one (no gaps, measured). Writes acknowledged *without* `j: true`
+still lose the tail written since the last journal flush, which mongod performs every 100 ms.
+That window did not widen: over ten killed runs each, the tail lost was 43-511 writes at
+mongod's journal settings and 114-464 at these — overlapping ranges, with the worst single
+run belonging to mongod's settings.
+
+The cache and the free-space floors are left where they were, and all four are settable:
+
+| Limit | Default | Set through |
+| --- | --- | --- |
+| Journal file size | 8 MiB (mongod: 100 MiB) | `Client::with_options` |
+| Journal pre-allocation | off (mongod: on) | `Client::with_options` |
+| WiredTiger cache | 256 MB | `Client::with_options` |
+| Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `set_free_disk_floor` at any time |
+
+The cache figure is the value this engine has always used, and is also the floor mongod will
+not go below on a server; mongod's *default* is half of system memory above the first
+gigabyte, which is not a number that means anything on a phone. It is a ceiling WiredTiger
+grows into rather than memory it takes, and a cold read-only process at Ireland scale peaks
+well under it, so it is exposed for tuning rather than because the default is wrong.
+
+```rust
+use embedded_mongodb::{Client, FreeDiskFloor, JournalFileSize, OpenOptions};
+
+let options = OpenOptions::new()
+    .journal_file_size(JournalFileSize::from_kibibytes(2048)?)
+    .free_disk_floor(FreeDiskFloor::from_mebibytes(32)?);
+let client = Client::with_options("./data", options)?;
+```
+
+Anything left unset keeps the engine's own default, so `Client::new(path)` and
+`Client::with_options(path, OpenOptions::new())` open identically.
+
+The free-space floor is the one worth thinking about before lowering. It is what stops an index
+build or a spilling query from starting when the device is nearly full — and nothing stops one
+that runs out part-way: WiredTiger answers a full disk by panicking, which takes the host
+process down without an error reaching the caller. How much headroom is enough depends on how
+much data is about to be indexed, which is why the default is left where MongoDB put it.
+
 ### Full examples
 
 Explore the complete runnable examples:
@@ -351,7 +404,7 @@ cargo build --release --target aarch64-linux-android
 `cargo-ndk` sets the same variables, if you would rather not.
 
 Ship two files with the application: `libembedded_mongodb_native.so` and the NDK's
-`libc++_shared.so`. The engine links its own C++ runtime statically and exports only the five
+`libc++_shared.so`. The engine links its own C++ runtime statically and exports only the six
 `extern "C"` entry points, but the bridge compiled into the Rust crate uses the NDK's default
 shared runtime, as any other NDK library in the same application does.
 
@@ -409,7 +462,7 @@ the version script on `@platforms//os:linux`, so it gets neither.
 
 The release build is size-optimized rather than speed-optimized: `-Os`, link-time optimization,
 per-function and per-data sections with `--gc-sections`, packed relative relocations, only the
-five `extern "C"` entry points exported, and no TLS, gRPC, OpenTelemetry or enterprise modules.
+six `extern "C"` entry points exported, and no TLS, gRPC, OpenTelemetry or enterprise modules.
 Run `./scripts/apply-mongo-patches` before building. It trims the embedded ICU collation tables
 (2.6 MB), removes the slot-based execution engine so queries run on the classic one (4.7 MB), the
 replication implementation the embedded server never uses (1.1 MB), the sharding runtime (2.5 MB)

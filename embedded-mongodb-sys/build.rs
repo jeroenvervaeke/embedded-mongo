@@ -76,7 +76,7 @@ fn main() {
     // added patch or header. Without these the staleness check below is unreachable for the
     // two edits developers actually make, and the next unrelated rebuild would compile
     // cpp/bridge.cc against a new native/embedded_mongodb_native.h while linking the engine
-    // built from the old one. The five extern "C" names would still match.
+    // built from the old one. The six extern "C" names would still match.
     println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-changed=include");
     println!("cargo:rerun-if-changed=src/ffi.rs");

@@ -1,7 +1,8 @@
-# The engine is reached through the five extern "C" entry points in
-# embedded_mongodb_native.h. Everything else is internal, including the third-party
-# libraries (cpptrace, libdwarf, wiredtiger, asio) whose headers mark their API
-# visibility("default") and so survive -fvisibility=hidden. Hiding them is worth 1.7 MB:
+# The engine is reached through the extern "C" entry points in embedded_mongodb_native.h --
+# six of them since embedded_mongodb_open_with_options joined the original five, which the
+# wildcard below covers without a version bump. Everything else is internal, including
+# the third-party libraries (cpptrace, libdwarf, wiredtiger, asio) whose headers mark their
+# API visibility("default") and so survive -fvisibility=hidden. Hiding them is worth 1.7 MB:
 # every exported symbol is a --gc-sections root.
 {
     global:

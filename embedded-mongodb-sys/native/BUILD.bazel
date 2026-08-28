@@ -5,6 +5,20 @@ cc_binary(
     srcs = [
         "embedded_mongodb_native.cpp",
         "embedded_mongodb_native.h",
+        "engine_identity.cpp",
+        "engine_identity.h",
+        "engine_options.cpp",
+        "engine_options.h",
+        "engine_recovery.cpp",
+        "engine_recovery.h",
+        "engine_runtime.cpp",
+        "engine_runtime.h",
+        "engine_services.cpp",
+        "engine_services.h",
+        "engine_sharding.cpp",
+        "engine_sharding.h",
+        "engine_startup.cpp",
+        "engine_startup.h",
         # Built with ssl=False, which drops the TLS stack this library has no use for.
         # MongoDB still references SSLPeerInfo::forSession from client.h and the
         # authentication commands, so its definition has to come along.
@@ -72,7 +86,7 @@ cc_binary(
         "//conditions:default": [],
     }),
     linkopts = select({
-        # The engine is reached through the five extern "C" entry points in
+        # The engine is reached through the extern "C" entry points in
         # embedded_mongodb_native.h. Every other exported symbol is a --gc-sections root, and
         # the third-party libraries mark their API visibility("default") in their own headers,
         # so -fvisibility=hidden still left 5915 of them exported. Hiding them is worth 1.7 MB.

@@ -100,14 +100,31 @@ void EmbeddedMongo::close() {
 }
 
 std::unique_ptr<EmbeddedMongo> open(rust::Str path) {
+    // A value-initialized NativeOpenOptions is zero in every field, which the engine reads as
+    // "use your own defaults" -- so this stays the same open it always was, whatever the
+    // library's defaults become.
+    return open_with_options(path, NativeOpenOptions{});
+}
+
+std::unique_ptr<EmbeddedMongo> open_with_options(rust::Str path,
+                                                 const NativeOpenOptions& options) {
     if (!initializerError.empty()) {
         throw std::runtime_error(initializerError);
     }
 
+    // `size` is what tells the engine how much of this struct exists. Filling it in here
+    // rather than in Rust keeps the two sides from having to agree on a number that changes
+    // whenever a field is added.
+    embedded_mongodb_open_options native{};
+    native.size = sizeof(native);
+    native.cache_size_mb = options.cache_size_mb;
+    native.journal_file_max_kb = options.journal_file_max_kb;
+    native.journal_prealloc = options.journal_prealloc;
+
     embedded_mongodb_handle* handle = nullptr;
     char* error = nullptr;
-    const auto status =
-        embedded_mongodb_open(path.data(), path.size(), &handle, &error);
+    const auto status = embedded_mongodb_open_with_options(
+        path.data(), path.size(), &native, &handle, &error);
     throw_if_error(status, error);
     if (!handle) {
         throw std::runtime_error("embedded MongoDB returned a null client");

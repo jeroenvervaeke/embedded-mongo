@@ -397,8 +397,11 @@ dependencies = [
 name = "embedded-mongodb-android"
 version = "0.1.0"
 dependencies = [
+ "embedded-mongodb",
  "embedded-mongodb-sys",
+ "flate2",
  "jni",
+ "tempfile",
 ]
 
 [[package]]
@@ -406,7 +409,7 @@ name = "embedded-mongodb-python"
 version = "0.1.0"
 dependencies = [
  "bson",
- "embedded-mongodb-sys",
+ "embedded-mongodb",
  "pyo3",
 ]
 
@@ -414,9 +417,11 @@ dependencies = [
 name = "embedded-mongodb-sys"
 version = "0.1.0"
 dependencies = [
+ "bson",
  "cxx",
  "cxx-build",
  "sha2",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

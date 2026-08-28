@@ -8,6 +8,8 @@
 
 namespace embedded_mongodb {
 
+struct NativeOpenOptions;
+
 class EmbeddedMongo {
 public:
     ~EmbeddedMongo();
@@ -20,7 +22,8 @@ public:
     void close();
 
 private:
-    friend std::unique_ptr<EmbeddedMongo> open(rust::Str path);
+    friend std::unique_ptr<EmbeddedMongo> open_with_options(rust::Str path,
+                                                            const NativeOpenOptions& options);
 
     explicit EmbeddedMongo(embedded_mongodb_handle* handle) noexcept;
 
@@ -28,5 +31,10 @@ private:
 };
 
 std::unique_ptr<EmbeddedMongo> open(rust::Str path);
+
+/// `open` with the storage limits in `options` applied. Every zero field there is the engine's
+/// own default, so an all-zero struct opens exactly as `open` does.
+std::unique_ptr<EmbeddedMongo> open_with_options(rust::Str path,
+                                                 const NativeOpenOptions& options);
 
 }  // namespace embedded_mongodb

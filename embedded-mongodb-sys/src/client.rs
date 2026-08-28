@@ -1,4 +1,4 @@
-use crate::{Error, Result, ffi};
+use crate::{EngineOptions, Error, Result, ffi};
 
 pub struct Client {
     inner: cxx::UniquePtr<ffi::bridge::EmbeddedMongo>,
@@ -12,7 +12,16 @@ unsafe impl Sync for Client {}
 
 impl Client {
     pub fn open(path: &str) -> Result<Self> {
-        let inner = ffi::bridge::open(path)?;
+        Self::from_inner(ffi::bridge::open(path)?)
+    }
+
+    /// `open` with the engine's storage limits overridden. Anything the caller left unset in
+    /// `options` stays the engine's own default.
+    pub fn open_with_options(path: &str, options: EngineOptions) -> Result<Self> {
+        Self::from_inner(ffi::bridge::open_with_options(path, &options.to_ffi())?)
+    }
+
+    fn from_inner(inner: cxx::UniquePtr<ffi::bridge::EmbeddedMongo>) -> Result<Self> {
         if inner.is_null() {
             return Err(Error::Closed);
         }

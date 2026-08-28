@@ -1,5 +1,16 @@
 #[cxx::bridge(namespace = "embedded_mongodb")]
 pub(crate) mod bridge {
+    /// The wire form of `crate::EngineOptions`, laid out to match
+    /// `embedded_mongodb_open_options`. Zero is "the engine's default" in every field, which
+    /// is what lets an unset option stay unset all the way down instead of being answered
+    /// with a number restated on this side.
+    struct NativeOpenOptions {
+        cache_size_mb: u32,
+        journal_file_max_kb: u32,
+        /// An `embedded_mongodb_journal_prealloc`; see `crate::Preallocation`.
+        journal_prealloc: u32,
+    }
+
     extern "Rust" {
         fn emit_mongodb_log(
             severity: i32,
@@ -17,6 +28,10 @@ pub(crate) mod bridge {
         type EmbeddedMongo;
 
         fn open(path: &str) -> Result<UniquePtr<EmbeddedMongo>>;
+        fn open_with_options(
+            path: &str,
+            options: &NativeOpenOptions,
+        ) -> Result<UniquePtr<EmbeddedMongo>>;
         fn run_command(self: &EmbeddedMongo, database: &str, command: &[u8]) -> Result<Vec<u8>>;
         fn close(self: Pin<&mut EmbeddedMongo>) -> Result<()>;
     }
