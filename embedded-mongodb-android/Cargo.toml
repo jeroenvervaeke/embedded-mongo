@@ -19,5 +19,15 @@ name = "jni_probe"
 crate-type = ["cdylib"]
 
 [dependencies]
+# The safe crate, not the raw FFI one: opening through it is what runs the one-time index
+# repair pass. `embedded-mongodb-sys` stays alongside it because `error.rs` names the engine
+# exception that `embedded_mongodb::Error::Native` carries.
+embedded-mongodb = { path = ".." }
 embedded-mongodb-sys = { path = "../embedded-mongodb-sys" }
 jni = "0.22.4"
+
+# The JVM tests unpack the committed damaged directory from `tests/fixtures` and drive the
+# bridge over it, through the same helper the root crate's repair tests use.
+[dev-dependencies]
+flate2 = "1"
+tempfile = "3"

@@ -75,7 +75,7 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
             "--//bazel/config:build_otel=False",
             "--//bazel/config:build_enterprise=False",
             // Symbolized backtraces, which this library has no way to surface: it exposes
-            // five extern "C" entry points and no crash reporter. Turning them off drops
+            // six extern "C" entry points and no crash reporter. Turning them off drops
             // cpptrace and libdwarf, the only two linked components MongoDB's own
             // THIRD-PARTY-NOTICES does not cover -- their table marks both as not
             // distributed in release binaries. libdwarf is LGPL-2.1, whose relink
@@ -131,7 +131,7 @@ fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf {
                 // so a dynamic libstdc++ would let its GLIBCXX and CXXABI floor move with
                 // the runner image -- and GCC 14 already emits the highest versions
                 // manylinux_2_39 permits, leaving no headroom. Safe here because export.map
-                // limits the surface to five extern "C" entry points, so no C++ type or
+                // limits the surface to six extern "C" entry points, so no C++ type or
                 // exception crosses the boundary. Costs about 2.4 MB.
                 "--linkopt=-static-libstdc++",
                 "--linkopt=-static-libgcc",

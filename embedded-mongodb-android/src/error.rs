@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::fmt;
 
+use embedded_mongodb::Error as EmbeddedError;
 use embedded_mongodb_sys::Error as NativeError;
 use jni::sys::jint;
 
@@ -94,21 +95,37 @@ impl fmt::Display for BridgeError {
 
 impl std::error::Error for BridgeError {}
 
-impl From<NativeError> for BridgeError {
-    fn from(error: NativeError) -> Self {
-        // The C++ bridge stringifies `mongo::DBException` with `Status::toString()`, which is
-        // `codeString(): reason`. Reporting the inner exception rather than the sys crate's
-        // Display keeps that prefix -- and the code inside it -- intact.
-        // Not `ClosedHandle`: the sys crate reports `Closed` for a null client, which is
-        // what a failed `open` produces, and -1 is reserved for a handle the registry could
-        // not resolve. Reporting an `open` failure as a stale handle would send the Kotlin
-        // side looking for a handle that never existed.
-        let NativeError::Native(exception) = &error else {
-            return Self::new(ErrorCode::Native, error.to_string());
-        };
-        let message = exception.what();
-        let code = location_code(message).map_or(ErrorCode::Native, ErrorCode::Mongo);
-        Self::new(code, message)
+impl From<EmbeddedError> for BridgeError {
+    fn from(error: EmbeddedError) -> Self {
+        match &error {
+            // The C++ bridge stringifies `mongo::DBException` with `Status::toString()`, which
+            // is `codeString(): reason`. Reporting the inner exception rather than either
+            // crate's Display keeps that prefix -- and the code inside it -- intact.
+            EmbeddedError::Native(NativeError::Native(exception)) => {
+                let message = exception.what();
+                let code = location_code(message).map_or(ErrorCode::Native, ErrorCode::Mongo);
+                Self::new(code, message)
+            }
+            // The bridge passes replies through unread, so nothing it does raises this; the
+            // index repair pass is the one caller that reads a reply, and it reports its own
+            // failures rather than returning them. Mapped anyway, because a code that reached
+            // Java as -5 would be indistinguishable from the engine having named none.
+            EmbeddedError::Server { code, .. } => Self::new(server_code(*code), error.to_string()),
+            // Not `ClosedHandle`: `Closed` is what a null client produces, which is a failed
+            // `open`, and -1 is reserved for a handle the registry could not resolve.
+            // Reporting an `open` failure as a stale handle would send the Kotlin side looking
+            // for a handle that never existed.
+            //
+            // `Native(Closed)` cannot occur -- the safe crate folds a closed native client
+            // into `Closed` -- but exhaustiveness has to name it, and naming it here rather
+            // than under a wildcard is what makes a new variant a compile error.
+            EmbeddedError::Bson(_)
+            | EmbeddedError::Closed
+            | EmbeddedError::InvalidArgument(_)
+            | EmbeddedError::InvalidResponse(_)
+            | EmbeddedError::Native(NativeError::Closed)
+            | EmbeddedError::NonUtf8Path => Self::new(ErrorCode::Native, error.to_string()),
+        }
     }
 }
 
@@ -125,6 +142,17 @@ impl BridgeError {
             message: message.into(),
         }
     }
+}
+
+/// The code a reply named, when Java can hold it.
+///
+/// Same rule as [`location_code`]: anything outside `1..=i32::MAX` falls back to the sentinel,
+/// because `0` is what the Kotlin side reads as "the reply named no code" and a truncated
+/// `i64` would name a different error entirely.
+fn server_code(code: Option<i64>) -> ErrorCode {
+    code.and_then(|code| i32::try_from(code).ok())
+        .filter(|code| *code > 0)
+        .map_or(ErrorCode::Native, ErrorCode::Mongo)
 }
 
 /// Reads the number out of a `Location<n>: reason` message, which is how MongoDB renders an
@@ -150,7 +178,8 @@ mod tests {
     use std::any::Any;
     use std::panic::UnwindSafe;
 
-    use super::{BridgeError, ErrorCode, NativeError, location_code};
+    use super::{BridgeError, EmbeddedError, ErrorCode, location_code, server_code};
+    use embedded_mongodb::bson::doc;
 
     #[test]
     fn reads_the_number_out_of_an_anonymous_mongodb_code() {
@@ -167,11 +196,55 @@ mod tests {
 
     #[test]
     fn reports_a_null_client_as_an_engine_failure_not_a_stale_handle() {
-        // `Client::open` answers `Closed` when the engine hands back nothing; that is a
+        // `Client::new` answers `Closed` when the engine hands back nothing; that is a
         // failure to open, and -1 would tell Kotlin its handle had gone stale instead.
-        let error = BridgeError::from(NativeError::Closed);
+        let error = BridgeError::from(EmbeddedError::Closed);
         assert_eq!(error.code(), ErrorCode::Native);
-        assert_eq!(error.message(), NativeError::Closed.to_string());
+        assert_eq!(error.message(), EmbeddedError::Closed.to_string());
+    }
+
+    /// Every variant that is not an engine exception still has to arrive as a description
+    /// rather than as an empty message with a sentinel code.
+    #[test]
+    fn reports_every_other_client_failure_as_an_engine_failure() {
+        for error in [
+            EmbeddedError::InvalidArgument("no"),
+            EmbeddedError::InvalidResponse("no ok field".to_owned()),
+            EmbeddedError::NonUtf8Path,
+        ] {
+            let described = error.to_string();
+            let bridged = BridgeError::from(error);
+            assert_eq!(bridged.code(), ErrorCode::Native);
+            assert_eq!(bridged.message(), described);
+        }
+    }
+
+    /// A reply the engine refused carries its own number, and that number is what Java is
+    /// owed: -5 would say the reply named no code at all.
+    #[test]
+    fn a_server_error_reaches_java_as_its_mongodb_code() {
+        let error = EmbeddedError::Server {
+            code: Some(11_000),
+            message: "duplicate key".to_owned(),
+            response: Box::new(doc! { "ok": 0.0 }),
+        };
+
+        let bridged = BridgeError::from(error);
+
+        assert_eq!(bridged.code(), ErrorCode::Mongo(11_000));
+        assert!(bridged.message().contains("duplicate key"), "{bridged}");
+    }
+
+    #[test]
+    fn a_server_code_java_cannot_hold_falls_back_to_the_sentinel() {
+        assert_eq!(server_code(None), ErrorCode::Native);
+        assert_eq!(server_code(Some(0)), ErrorCode::Native);
+        assert_eq!(server_code(Some(-1)), ErrorCode::Native);
+        assert_eq!(
+            server_code(Some(i64::from(i32::MAX) + 1)),
+            ErrorCode::Native
+        );
+        assert_eq!(server_code(Some(11_000)), ErrorCode::Mongo(11_000));
     }
 
     #[test]

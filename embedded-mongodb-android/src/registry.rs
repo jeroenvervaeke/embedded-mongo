@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use embedded_mongodb_sys::Client;
+use embedded_mongodb::Client;
 
 use crate::error::{BridgeError, Result};
 use crate::handle::{Counter, HandleId};
@@ -120,7 +120,10 @@ impl<C: EmbeddedClient> Default for Registry<C> {
 
 impl EmbeddedClient for Client {
     fn run_command(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
-        Client::run_command(self, database, command).map_err(BridgeError::from)
+        // The byte route rather than the document one: a command the server refuses is a reply
+        // this binding owes Java verbatim, not an exception, and only `run_command_bytes`
+        // leaves `ok: 0` in the buffer.
+        Client::run_command_bytes(self, database, command).map_err(BridgeError::from)
     }
 
     fn close(self) -> Result<()> {

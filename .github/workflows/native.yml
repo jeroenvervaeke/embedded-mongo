@@ -397,10 +397,12 @@ jobs:
           # libc++_shared.so onto every consumer of the engine.
           ! readelf -d "$lib" | grep -q 'libc++_shared' \
             || { echo 'the C++ runtime is still dynamically linked' >&2; exit 1; }
-          # The version script leaves exactly the five entry points.
+          # The version script leaves exactly the six entry points declared in
+          # embedded_mongodb_native.h. An exact count rather than a floor: an accidental
+          # export is a --gc-sections root, which is what the version script exists to stop.
           exports=$(nm -D --defined-only "$lib" | grep -c ' T embedded_mongodb_' || true)
-          test "$exports" -eq 5 \
-            || { echo "expected 5 exported entry points, found $exports" >&2; exit 1; }
+          test "$exports" -eq 6 \
+            || { echo "expected 6 exported entry points, found $exports" >&2; exit 1; }
 
           # A shared library records what it needs but is never asked to resolve it until a
           # process loads it, so a missing bionic symbol is invisible to the link and fatal at

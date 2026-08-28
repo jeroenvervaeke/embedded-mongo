@@ -34,7 +34,7 @@ Everything above the rule was established in earlier rounds and is unchanged.
 | `--//bazel/config:opt=size` (`-Os` instead of `-O2`) | 61,956,680 | −34.6 MB |
 | `ssl=False`, `build_otel=False`, `build_enterprise=False` | 54,050,888 | −7.9 MB |
 | — rebuilt on the older GCC — | 54,216,296 | |
-| `--version-script`, exporting only the five entry points | 52,496,088 | −1.72 MB |
+| `--version-script`, exporting only the engine entry points | 52,496,088 | −1.72 MB |
 | GCC LTO, linked with `ld.bfd` | 44,885,600 | −7.53 MB |
 | ICU collation trim (`patches/0001`) | 42,317,408 | −2.57 MB |
 | SBE removal (`patches/0003`) | 37,568,416 | −4.75 MB |
@@ -59,7 +59,7 @@ all mark their public API `visibility("default")` in their own headers, which be
 command-line default. Every exported symbol is a `--gc-sections` root, so the linker was being
 told to keep all of it.
 
-`embedded-mongodb-sys/native/export.map` restricts the dynamic symbol table to the five
+`embedded-mongodb-sys/native/export.map` restricts the dynamic symbol table to the
 `embedded_mongodb_*` entry points. That is worth 1.72 MB on its own, and it is what lets LTO
 internalize almost the entire program — the two compound.
 
@@ -402,7 +402,7 @@ The publish path also assembles THIRD-PARTY-NOTICES from the Bazel link command 
 copying MongoDB's, and fails when a linked component is unaccounted for. That gate is what
 found `cpptrace` (44 objects) and `libdwarf` (59) in the link with no notice covering them:
 MongoDB's inventory marks both as not distributed in release binaries, because they link them
-only in their own tooling. They are backtrace symbolization, which a library exposing five
+only in their own tooling. They are backtrace symbolization, which a library exposing six
 `extern "C"` entry points and no crash reporter cannot surface, so `build_native.rs` now
 passes `--//bazel/config:dev_stacktrace=False`. No patch was needed — upstream gates the
 dependency and every call site on that flag, and uses it themselves for `remote_unittest`.
