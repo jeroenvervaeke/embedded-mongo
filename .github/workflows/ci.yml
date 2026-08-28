@@ -121,12 +121,19 @@ jobs:
       # interpreter for the target it links against, and there is no Android CPython here.
       - if: matrix.cross
         run: cargo test --release --all-targets --no-run --workspace --exclude embedded-mongodb-python --target ${{ matrix.target }}
+      # Before the tests, not after: cargo test emits no cdylib even under --all-targets, so
+      # neither the JNI library that ships nor the probe the JVM tests load exists until a
+      # cargo build produces them. The JVM tests refuse to run against a missing probe rather
+      # than silently testing nothing, so without this they fail outright.
+      #
+      # Scoped to this one package rather than the workspace: a workspace-wide build also
+      # links embedded-mongodb-python's cdylib, and pyo3 needs maturin's link arguments to
+      # resolve the interpreter's symbols. Without them it fails to link on macOS. The wheel
+      # job is where that crate is built, with maturin.
+      - if: '!matrix.cross'
+        run: cargo build --release -p embedded-mongodb-android --all-targets
       - if: '!matrix.cross'
         run: cargo test --release --all-targets --workspace
-      # cargo test builds no cdylib, not even under --all-targets, so the JNI library that
-      # actually ships is never linked by the step above.
-      - if: '!matrix.cross'
-        run: cargo build --release --workspace
       - if: '!matrix.cross'
         run: cargo run --release --example basic
 
