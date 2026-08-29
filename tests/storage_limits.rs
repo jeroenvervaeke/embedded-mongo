@@ -11,7 +11,8 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, FreeDiskFloor, OpenOptions, ReportedFloors, bson::doc, free_disk_floors,
+    Client, FreeDiskFloor, IndexBuildFloor, OpenOptions, QuerySpillingFloor, ReportedFloors,
+    bson::doc,
 };
 
 /// Four tebibytes. Larger than the disk under any machine this runs on, so the check cannot
@@ -35,11 +36,14 @@ fn the_free_disk_floor_decides_whether_an_index_build_starts() {
         .expect("opening an empty directory");
 
     assert_eq!(
-        free_disk_floors(&client).expect("the engine reports its floors"),
-        ReportedFloors {
-            index_build_mebibytes: i64::from(MORE_THAN_ANY_DEVICE_HAS),
-            query_spilling_bytes: i64::from(MORE_THAN_ANY_DEVICE_HAS) * 1024 * 1024,
-        },
+        client
+            .process_limits()
+            .free_disk_floors()
+            .expect("the engine reports its floors"),
+        ReportedFloors::new(
+            IndexBuildFloor::from_mebibytes(i64::from(MORE_THAN_ANY_DEVICE_HAS)),
+            QuerySpillingFloor::from_bytes(i64::from(MORE_THAN_ANY_DEVICE_HAS) * 1024 * 1024),
+        ),
         "the floor the client asked for is not the one the engine is running with"
     );
 
@@ -63,7 +67,10 @@ fn the_free_disk_floor_decides_whether_an_index_build_starts() {
 
     // And back: the floor is the only thing that was in the way.
     let reachable = FreeDiskFloor::from_mebibytes(REACHABLE).expect("32 MiB is in range");
-    embedded_mongodb::set_free_disk_floor(&client, reachable).expect("lowering the floor");
+    client
+        .process_limits()
+        .set_free_disk_floor(reachable)
+        .expect("lowering the floor");
     database
         .run_command(&doc! {
             "createIndexes": "places",

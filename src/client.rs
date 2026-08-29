@@ -1,4 +1,6 @@
-use crate::{Database, Error, OpenOptions, Result, error::validate_response, limits, repair};
+use crate::{
+    Database, Error, OpenOptions, ProcessLimits, Result, error::validate_response, limits, repair,
+};
 use bson::Document;
 use embedded_mongodb_sys::Client as NativeClient;
 use std::path::Path;
@@ -119,6 +121,17 @@ impl Client {
 
     pub fn database(&self, name: &str) -> Database<'_> {
         Database::new(self, name)
+    }
+
+    /// The limits reached through this client that belong to the *process* rather than to it.
+    ///
+    /// The free-disk floors are server parameters of the one runtime this process keeps, so
+    /// moving one through this client moves it for every client in the process and for every
+    /// database name they serve. [`ProcessLimits`] is where that is spelled out; the scope is
+    /// on the handle so that it is in front of a reader at the call site rather than only in
+    /// the documentation.
+    pub fn process_limits(&self) -> ProcessLimits<'_> {
+        ProcessLimits::new(self)
     }
 
     #[tracing::instrument(name = "embedded_mongodb.close", level = "debug", skip_all, err)]

@@ -1,3 +1,4 @@
+use crate::FreeDiskFloor;
 use bson::{Bson, Document};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -8,6 +9,30 @@ pub enum Error {
     Bson(#[from] bson::error::Error),
     #[error("embedded MongoDB client is closed")]
     Closed,
+    /// A free-disk floor that could not be applied and could not be put back either, so the
+    /// engine is on floors nobody chose.
+    ///
+    /// Materially different from an ordinary failure, and separate because of it: a caller who
+    /// catches "your request failed" reasonably assumes nothing happened, and here something
+    /// did. The two knobs take two commands, so a move stopped between them leaves one of them
+    /// somewhere neither the caller nor this library asked for -- and downward, in the case
+    /// that matters. An application that would rather refuse work than do it against an unknown
+    /// floor catches this and refuses; both reasons are carried so it can say why.
+    #[error(
+        "the free disk floor could not be moved to {mebibytes} MiB and the floors could not be \
+         put back either, so the engine is on floors nobody chose -- the move failed with: \
+         {cause}; putting them back failed with: {rollback}",
+        mebibytes = .requested.mebibytes()
+    )]
+    FreeDiskFloorNotRestored {
+        /// The floor the caller asked for, which is not the one in force.
+        requested: FreeDiskFloor,
+        /// Why the move failed.
+        #[source]
+        cause: Box<Error>,
+        /// Why putting the floors back failed.
+        rollback: Box<Error>,
+    },
     #[error("{0}")]
     InvalidArgument(&'static str),
     #[error("invalid embedded MongoDB response: {0}")]

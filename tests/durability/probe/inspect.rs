@@ -33,6 +33,7 @@ pub fn variant(error: &Error) -> &'static str {
     match error {
         Error::Bson(_) => "Bson",
         Error::Closed => "Closed",
+        Error::FreeDiskFloorNotRestored { .. } => "FreeDiskFloorNotRestored",
         Error::InvalidArgument(_) => "InvalidArgument",
         Error::InvalidResponse(_) => "InvalidResponse",
         Error::Native(_) => "Native",

@@ -16,7 +16,7 @@
 #[path = "scratch/mod.rs"]
 mod scratch;
 
-use embedded_mongodb::{Client, FreeDiskFloor, OpenOptions, free_disk_floors};
+use embedded_mongodb::{Client, FreeDiskFloor, OpenOptions};
 use std::{
     env,
     path::{Path, PathBuf},
@@ -117,12 +117,15 @@ fn child(directory: &Path) -> Output {
 }
 
 fn report(key: &str, client: &Client) {
-    let reported = free_disk_floors(client).expect("the engine reports its floors");
+    let reported = client
+        .process_limits()
+        .free_disk_floors()
+        .expect("the engine reports its floors");
     println!(
         "{MARK}{key}={}",
         floors(
-            reported.index_build_mebibytes,
-            reported.query_spilling_bytes
+            reported.index_build().mebibytes(),
+            reported.query_spilling().bytes()
         )
     );
 }
