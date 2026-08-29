@@ -29,6 +29,23 @@ import org.bson.Document
  * Worth pairing with [InsufficientStorageException], which is thrown before the engine is
  * opened at all: a floor named here also lowers the room that check insists on, since an
  * application that says 64 MiB is enough should not be refused at 256 MB.
+ *
+ * ## It is process-global, not per-database
+ *
+ * Both floors are MongoDB **server parameters**, and this engine keeps one runtime for the whole
+ * life of the process. A floor is therefore a setting of the *process*, not of the
+ * [EmbeddedMongo] that named it: it survives that instance's [EmbeddedMongo.close], and left
+ * alone it would still be in force for the next [EmbeddedMongo.open]. That is not guessable from
+ * an API where the floor is named per-open, so this library does not leave it to be discovered —
+ * **every open establishes the floor**, putting MongoDB's own back where the caller named none.
+ * An application that opens one database on a lowered floor, closes it and opens another gets
+ * the defaults it asked for rather than the previous database's floor.
+ *
+ * Two consequences worth knowing. A floor moved with [setFreeDiskFloor] on a running database
+ * lasts until the next [EmbeddedMongo.open], which resets it — it is not remembered for a
+ * database, so an application that wants it every time names it in [StorageOptions.freeDiskFloor]
+ * rather than setting it after opening. And while a database is open the floor is shared by every
+ * database name inside it, because there is only ever one engine to set it on.
  */
 @JvmInline
 value class FreeDiskFloor private constructor(val mebibytes: Int) {
@@ -70,6 +87,10 @@ data class ReportedFloors(val indexBuildMebibytes: Long, val querySpillingBytes:
  * [StorageOptions.freeDiskFloor] is the usual way to reach this, and applies it during
  * [EmbeddedMongo.open]. This is here as well because the floor is the one limit that can move
  * while running: raise it before a large index build and drop it again afterwards.
+ *
+ * What moves is a pair of server parameters belonging to the process rather than to this
+ * database — see [FreeDiskFloor]. It reaches every database name this engine serves, and the
+ * next [EmbeddedMongo.open] puts it back to whatever that open asks for.
  *
  * @throws EmbeddedMongoException if the engine will not take the floor. Returned rather than
  *   logged: an application that asked for a floor and did not get it would otherwise find out
@@ -116,24 +137,15 @@ fun EmbeddedMongo.freeDiskFloorsBlocking(): ReportedFloors =
     reportedFloors(commandBlocking(ADMIN, reportedFloorsCommand()))
 
 /**
- * Applies [floor] to a database that has just opened, closing it if the engine refuses.
+ * Puts [floors] in force, each knob in the unit it takes.
  *
- * A failed open must leave no engine behind: only one runtime may exist per process, so an
- * engine nobody holds a handle to is one this process can never open a database in again.
+ * Separate from [setFreeDiskFloor] because a [ReportedFloors] is not a [FreeDiskFloor]: the
+ * spilling knob is a byte count that need not be a whole mebibyte, so floors read back from the
+ * engine have to be restored to what was read rather than to a number rounded through this
+ * library's type.
  */
-internal fun EmbeddedMongo.withFreeDiskFloor(floor: FreeDiskFloor?): EmbeddedMongo {
-    if (floor == null) return this
-    try {
-        setFreeDiskFloorBlocking(floor)
-    } catch (failure: Throwable) {
-        try {
-            close()
-        } catch (closing: Throwable) {
-            failure.addSuppressed(closing)
-        }
-        throw failure
-    }
-    return this
+internal fun EmbeddedMongo.restoreFreeDiskFloorsBlocking(floors: ReportedFloors) {
+    for (knob in floors.commands()) commandBlocking(ADMIN, knob)
 }
 
 /**

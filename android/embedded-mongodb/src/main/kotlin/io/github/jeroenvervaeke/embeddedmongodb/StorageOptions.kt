@@ -26,6 +26,11 @@ package io.github.jeroenvervaeke.embeddedmongodb
  * already open — see [setFreeDiskFloor]. That split matters to this library and not to a
  * caller, which is why all four are named in one place.
  *
+ * Being server parameters, the floors belong to the process rather than to one database, so
+ * every [EmbeddedMongo.open] establishes them: naming no [freeDiskFloor] opens on MongoDB's own,
+ * not on whatever a database closed earlier in this process left behind. [FreeDiskFloor] has the
+ * whole of it. The first three carry no such history — they are given to WiredTiger as it opens.
+ *
  * @property cacheSize the ceiling on the WiredTiger cache. Default 256 MB, which is a ceiling
  *   the engine grows into rather than memory it takes.
  * @property journalFileSize the size of one journal file, which every journal file is

@@ -220,9 +220,14 @@ class EmbeddedMongo internal constructor(
          * open and this needs it: the index repair pass the open may run builds its indexes
          * through `validate`, which does not consult the floor — only `createIndexes` does, and
          * the caller cannot have run one yet.
+         *
+         * Applied on every open, including one that named no floor at all. The floor is a
+         * setting of the process rather than of a database, so a caller who named none has to be
+         * put back on MongoDB's own floors instead of being left on whatever an earlier database
+         * set and closed; `establishFreeDiskFloor` is where that is spelled out.
          */
         private fun opened(directory: File, options: StorageOptions) =
             EmbeddedMongo(NativeEngine.open(directory, options), MainThreadGuard.Android)
-                .withFreeDiskFloor(options.freeDiskFloor)
+                .establishFreeDiskFloor(options.freeDiskFloor)
     }
 }
