@@ -95,8 +95,13 @@ private object NativeBridgeOpener : BridgeOpener {
  * the growth rule the bridge documents is exercised by ordinary use rather than only by a
  * test. Trimming can only ever drop zeros, which are what "not named" is spelled as.
  *
- * [StorageOptions.freeDiskFloor] is deliberately absent: it is a server parameter, set with a
- * command after the engine is up, and it has no business in a vector read at open.
+ * [StorageOptions.freeDiskFloor] is deliberately absent, and adding a slot for it would
+ * reintroduce a defect rather than merely blur a layer. Both layers record "MongoDB's own
+ * floors" at their first open, and they agree only because the floor never crosses this
+ * vector: the crate has already put the engine's defaults back before Kotlin takes its
+ * reading. Carry the floor across here and Kotlin records the first caller's floor as the
+ * default and holds it for the life of the process. `embedded-mongodb-android/src/options.rs`
+ * has the long version.
  */
 internal fun StorageOptions.engineSlots(): LongArray {
     val slots = longArrayOf(
