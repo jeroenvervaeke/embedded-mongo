@@ -18,7 +18,27 @@ val abiTargets = mapOf(
 )
 
 /** Bionic API level the engine and its prebuilt libraries are compiled against. */
-val androidApiLevel = 24
+val nativeApiLevel = 24
+
+/**
+ * Android 8.0, and deliberately higher than [nativeApiLevel].
+ *
+ * The engine itself runs on Android 7.0 -- the 23 instrumented tests load it, open a database and
+ * answer commands on an API 24 device without a native crash. What does not run there is this
+ * module's own public API: `Document` is in every signature, so `org.bson` is an `api` dependency,
+ * and `org.bson.conversions.Bson`'s static initializer builds the JSR-310 codecs:
+ *
+ *     java.lang.NoClassDefFoundError: Failed resolution of: Ljava/time/Instant;
+ *         at org.bson.codecs.jsr310.InstantCodec.getEncoderClass(InstantCodec.java:64)
+ *         at org.bson.codecs.jsr310.Jsr310CodecProvider.<clinit>(Jsr310CodecProvider.java:44)
+ *         at org.bson.conversions.Bson.<clinit>(Bson.java:61)
+ *
+ * `java.time` arrived in API 26, so on 24 and 25 the first call touching a `Document` dies before
+ * it reaches the engine. Core library desugaring would supply `java.time`, but it is not
+ * transitive -- an AAR cannot turn it on for the application consuming it -- so 26 is the lowest
+ * floor this module can honour on its own.
+ */
+val minimumSdk = 26
 
 val jniCrate = "embedded-mongodb-android"
 
@@ -31,7 +51,7 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        minSdk = androidApiLevel
+        minSdk = minimumSdk
         ndk { abiFilters += abiTargets.keys }
         consumerProguardFiles("consumer-rules.pro")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -100,7 +120,7 @@ val cargoJniLibs = tasks.register<CargoJniLibs>("cargoJniLibs") {
     manifestPath = workspace.resolve("$jniCrate/Cargo.toml").path
     cargoExecutable = providers.environmentVariable("CARGO").orElse("cargo")
     abis = abiTargets
-    apiLevel = androidApiLevel.toString()
+    apiLevel = nativeApiLevel.toString()
     ndkPath = android.sdkDirectory.resolve("ndk/${android.ndkVersion}").path
     outputDirectory = layout.buildDirectory.dir("jniLibs")
 }

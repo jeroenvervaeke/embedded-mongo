@@ -352,8 +352,17 @@ and every `select()` in the engine and its third-party tree is written against `
 and `patches/0007-build-for-android.patch` covers what bionic and libc++ do not provide.
 `patches/0008-guard-a-null-shared-object-name-on-bionic.patch` covers the other direction:
 bionic hands `dl_iterate_phdr` callbacks a null object name where glibc passes the empty
-string, and the stack-trace machinery took that on trust — a segfault as the library loads
-on Android releases before 9.0, which is below the `minSdk` the AAR advertises.
+string, and the stack-trace machinery took that on trust — `strlen(nullptr)` inside
+`DlPhdrStore::initCb`, reached from `System.loadLibrary`, because the sys crate's
+`cpp/bridge.cc` calls `embedded_mongodb_initialize` from a namespace-scope initializer and
+that runs `runGlobalInitializers` from the linker's `.init_array`.
+
+That guard is load-bearing for the floor the AAR advertises, not below it. On API 24 and API
+26 emulators the first entry `dl_iterate_phdr` yields has a null name (and no program
+headers); on API 35 the same slot is `/system/bin/linker64` with a real one. The pre-guard
+library segfaulted on both 24 and 26 and ran clean on 35; the guarded library runs the
+instrumented suite on both. Anything at or above `minSdk` 26 and below Android 9.0 depends on
+it.
 
 Intel macOS is absent because that runner never finished a build inside the six-hour job cap,
 and GitHub retires the image in August 2027. Windows is tracked in
