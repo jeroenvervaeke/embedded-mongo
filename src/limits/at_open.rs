@@ -34,7 +34,8 @@
 //! where the index build was the thing that had to work.
 
 use super::{
-    AdminCommands, FreeDiskFloor, ReportedFloors, apply_floor, reported_floors, restore_floors,
+    AdminCommands, FreeDiskFloor, ReportedFloors,
+    knobs::{reported_floors, send},
 };
 use crate::{Client, Result};
 use std::sync::{Mutex, PoisonError};
@@ -62,8 +63,8 @@ fn establish(
     // for MongoDB's and hand it to every later open that asked for the default.
     let engine_own = defaults.of(engine)?;
     match requested {
-        Some(floor) => apply_floor(engine, floor),
-        None => restore_floors(engine, engine_own),
+        Some(floor) => send(engine, floor.commands()),
+        None => send(engine, engine_own.commands()),
     }
 }
 
@@ -123,9 +124,10 @@ impl EngineFloorDefaults {
 mod tests {
     use super::{EngineFloorDefaults, establish};
     use crate::{
-        Error, Result,
+        Error, IndexBuildFloor, QuerySpillingFloor, Result,
         limits::{
-            AdminCommands, FreeDiskFloor, INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR, ReportedFloors,
+            AdminCommands, FreeDiskFloor, ReportedFloors,
+            knobs::{INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR, send},
         },
     };
     use bson::{Document, doc};
@@ -195,10 +197,7 @@ mod tests {
             defaults
                 .of(&FakeEngine::never_read())
                 .expect("the floors were recorded at the first open"),
-            ReportedFloors {
-                index_build_mebibytes: DEFAULT_MEBIBYTES,
-                query_spilling_bytes: DEFAULT_BYTES,
-            }
+            engine_own_floors()
         );
     }
 
@@ -290,17 +289,18 @@ mod tests {
         let defaults = EngineFloorDefaults::new();
         let engine = FakeEngine::reporting(DEFAULT_MEBIBYTES);
         establish(&engine, None, &defaults).expect("the first open");
-        crate::limits::apply_floor(&engine, floor(16)).expect("lowering it while running");
+        send(&engine, floor(16).commands()).expect("lowering it while running");
 
         establish(&engine, None, &defaults).expect("the next open");
 
-        assert_eq!(
-            engine.reported(),
-            ReportedFloors {
-                index_build_mebibytes: DEFAULT_MEBIBYTES,
-                query_spilling_bytes: DEFAULT_BYTES,
-            }
-        );
+        assert_eq!(engine.reported(), engine_own_floors());
+    }
+
+    fn engine_own_floors() -> ReportedFloors {
+        ReportedFloors::new(
+            IndexBuildFloor::from_mebibytes(DEFAULT_MEBIBYTES),
+            QuerySpillingFloor::from_bytes(DEFAULT_BYTES),
+        )
     }
 
     fn floor(mebibytes: u32) -> FreeDiskFloor {
@@ -349,10 +349,10 @@ mod tests {
     impl FakeEngine {
         fn new(index_build_mebibytes: i64, query_spilling_bytes: i64) -> Self {
             Self {
-                floors: RefCell::new(ReportedFloors {
-                    index_build_mebibytes,
-                    query_spilling_bytes,
-                }),
+                floors: RefCell::new(ReportedFloors::new(
+                    IndexBuildFloor::from_mebibytes(index_build_mebibytes),
+                    QuerySpillingFloor::from_bytes(query_spilling_bytes),
+                )),
                 commands: RefCell::new(Vec::new()),
                 quirk: Quirk::None,
             }
@@ -406,8 +406,8 @@ mod tests {
                 let mut reply = doc! { "ok": 1.0 };
                 let floors = self.floors.borrow();
                 for (knob, value) in [
-                    (INDEX_BUILD_FLOOR, floors.index_build_mebibytes),
-                    (QUERY_SPILLING_FLOOR, floors.query_spilling_bytes),
+                    (INDEX_BUILD_FLOOR, floors.index_build().mebibytes()),
+                    (QUERY_SPILLING_FLOOR, floors.query_spilling().bytes()),
                 ] {
                     if self.quirk != Quirk::Hides(knob) {
                         reply.insert(knob, value);
@@ -425,12 +425,14 @@ mod tests {
                 });
             }
             let mut floors = self.floors.borrow_mut();
-            if let Ok(mebibytes) = command.get_i64(INDEX_BUILD_FLOOR) {
-                floors.index_build_mebibytes = mebibytes;
-            }
-            if let Ok(bytes) = command.get_i64(QUERY_SPILLING_FLOOR) {
-                floors.query_spilling_bytes = bytes;
-            }
+            *floors = ReportedFloors::new(
+                command
+                    .get_i64(INDEX_BUILD_FLOOR)
+                    .map_or(floors.index_build(), IndexBuildFloor::from_mebibytes),
+                command
+                    .get_i64(QUERY_SPILLING_FLOOR)
+                    .map_or(floors.query_spilling(), QuerySpillingFloor::from_bytes),
+            );
             Ok(doc! { "ok": 1.0 })
         }
     }

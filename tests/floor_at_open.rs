@@ -121,8 +121,8 @@ fn report(key: &str, client: &Client) {
     println!(
         "{MARK}{key}={}",
         floors(
-            reported.index_build_mebibytes,
-            reported.query_spilling_bytes
+            reported.index_build().mebibytes(),
+            reported.query_spilling().bytes()
         )
     );
 }

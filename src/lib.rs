@@ -19,5 +19,8 @@ pub use embedded_mongodb_sys::{CacheSize, JournalFileSize, OutOfRange, Prealloca
 pub use error::{Error, Result};
 pub use find::Cursor;
 pub use insert::{InsertManyResult, InsertOneResult};
-pub use limits::{FreeDiskFloor, ReportedFloors, free_disk_floors, set_free_disk_floor};
+pub use limits::{
+    FreeDiskFloor, IndexBuildFloor, QuerySpillingFloor, ReportedFloors, free_disk_floors,
+    set_free_disk_floor,
+};
 pub use options::OpenOptions;
