@@ -15,6 +15,11 @@ impl Client {
     /// scan of every collection in it. Only the first open after upgrading pays for that, and
     /// a directory this build created is never scanned at all. Set
     /// `EMBEDDED_MONGODB_SKIP_INDEX_REPAIR` to leave the check out.
+    ///
+    /// Opens on MongoDB's own free-disk floors however low an earlier client in this process
+    /// left them: they are process-wide server parameters rather than a setting of any one
+    /// client, and this open puts them back rather than inheriting them. See
+    /// [`FreeDiskFloor`](crate::FreeDiskFloor).
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         Self::open(path, None)
     }
@@ -23,6 +28,12 @@ impl Client {
     /// cache may reach, how large its journal files are and how little free disk space it
     /// will still start an index build on. Anything left unset in `options` keeps the
     /// engine's own default, which is what `new` opens with.
+    ///
+    /// That holds for the free-disk floor as well, and it takes work rather than nothing: the
+    /// floors are process-wide server parameters that outlive the client which named them, so
+    /// an open that names none puts MongoDB's own back rather than inheriting whatever an
+    /// earlier client in this process left behind. [`FreeDiskFloor`](crate::FreeDiskFloor) has
+    /// the whole of it.
     pub fn with_options(path: impl AsRef<Path>, options: OpenOptions) -> Result<Self> {
         Self::open(path, Some(options))
     }
@@ -54,9 +65,15 @@ impl Client {
         // Before the repair pass, which creates indexes: a floor the caller lowered so that
         // index builds work on a full device has to be in force by the time this engine
         // builds one of its own.
-        if let Some(floor) = options.and_then(|options| options.free_disk_floor) {
-            limits::set_free_disk_floor(&client, floor)?;
-        }
+        //
+        // Run for every open, including one that named no floor at all. The floors are
+        // server parameters of the process rather than settings of a client, so a caller who
+        // named none has to be put back on MongoDB's own instead of being left on whatever an
+        // earlier client set and closed; `limits::at_open` is where that is spelled out.
+        limits::at_open::establish_free_disk_floor(
+            &client,
+            options.and_then(|options| options.free_disk_floor),
+        )?;
         repair::run(&client, path, origin);
         Ok(client)
     }

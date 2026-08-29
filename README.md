@@ -195,6 +195,17 @@ let client = Client::with_options("./data", options)?;
 Anything left unset keeps the engine's own default, so `Client::new(path)` and
 `Client::with_options(path, OpenOptions::new())` open identically.
 
+Keeping that promise for the free-space floor takes work rather than nothing, and the reason is
+worth knowing. Both floors are MongoDB **server parameters**, and this engine keeps one runtime
+for the whole life of the process, so a floor belongs to the process rather than to the
+`Client` that named it: it outlives that client's `close`, and left alone it would still be in
+force at the next open. Every open therefore establishes the floor — the caller's if named,
+MongoDB's own otherwise, read from the engine before anything moved them. An application that
+opens one database on a lowered floor, closes it and opens another gets the defaults it asked
+for rather than the first database's floor. Two consequences: a floor moved with
+`set_free_disk_floor` on a running client lasts only until the next open, and while a client is
+open the floor is shared by every database name it serves.
+
 The free-space floor is the one worth thinking about before lowering. It is what stops an index
 build or a spilling query from starting when the device is nearly full — and nothing stops one
 that runs out part-way: WiredTiger answers a full disk by panicking, which takes the host
