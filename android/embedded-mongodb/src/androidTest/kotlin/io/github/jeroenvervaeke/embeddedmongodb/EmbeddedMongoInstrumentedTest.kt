@@ -190,8 +190,8 @@ class EmbeddedMongoInstrumentedTest {
     fun thePlatformReportsHowMuchRoomItCanGiveTheEngine() {
         val allocatable = allocatableBytes(context, root)
 
-        // The API this rests on arrived in API 26 and this runs above it, so a null here would
-        // mean the measurement quietly does nothing on the devices it was written for.
+        // The API this rests on arrived in API 26, which is this library's floor, so it is there
+        // on every supported device: a null here would mean the measurement quietly does nothing.
         assertNotNull(allocatable)
         assertTrue(allocatable > 0, "the platform reported $allocatable allocatable bytes")
     }

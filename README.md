@@ -385,8 +385,13 @@ inside GitHub's six-hour job limit, and GitHub retires the image in August 2027 
 
 ### Android
 
-Both 64-bit ABIs are published, compiled against bionic at API level 24 — Android 7.0.
-32-bit Android is not supported: MongoDB builds only for 64-bit platforms.
+Both 64-bit ABIs are published, compiled against bionic at API level 24 — Android 7.0 — and
+verified to load, open a database and answer commands on an API 24 device. 32-bit Android is
+not supported: MongoDB builds only for 64-bit platforms.
+
+The `embedded-mongodb` AAR sets `minSdk` 26 even so, because `org.bson` reaches for
+`java.time` and that arrived in API 26; `android/README.md` has the detail. Rust callers
+linking the engine directly are not bound by that and can target 24.
 
 Cargo has to be told which toolchain to use. `cc`, which the `cxx` bridge and
 `link-cplusplus` run, carries no NDK of its own and looks for a `<triple>-clang++` the NDK

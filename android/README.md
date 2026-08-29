@@ -56,7 +56,7 @@ dependencies {
 
 android {
     defaultConfig {
-        minSdk = 24
+        minSdk = 26
 
         // Only if the application ships other native code: an AAR's ABI list does not reach the
         // application's, so an unrelated 32-bit library would produce an armeabi-v7a split that
@@ -66,7 +66,32 @@ android {
 }
 ```
 
-`minSdk` 24 is the floor: the published libraries are compiled against bionic at API level 24.
+`minSdk` 26 — Android 8.0 — is the floor, and it is verified on a device rather than claimed: the
+23 instrumented tests pass on an API 26 emulator, and the same suite on API 35 fails nothing that
+API 26 does not.
+
+The floor is set by `org.bson`, not by the engine. The engine is compiled against bionic at API
+level 24 and does run there — on an API 24 device it loads, opens a database and answers commands.
+But `Document` is in every signature here, so `org.bson` is an `api` dependency, and
+`org.bson.conversions.Bson`'s static initializer builds the JSR-310 codecs:
+
+```
+java.lang.NoClassDefFoundError: Failed resolution of: Ljava/time/Instant;
+    at org.bson.codecs.jsr310.InstantCodec.getEncoderClass(InstantCodec.java:64)
+    at org.bson.codecs.jsr310.Jsr310CodecProvider.<clinit>(Jsr310CodecProvider.java:44)
+    at org.bson.conversions.Bson.<clinit>(Bson.java:61)
+```
+
+`java.time` arrived in API 26, so on 24 and 25 the first call that touches a `Document` dies there,
+before it reaches the engine. Core library desugaring exists to backport `java.time`, but it is not
+transitive — an AAR cannot enable it for the application consuming it — so 26 is the lowest floor
+this module can honour on its own.
+
+One caveat for anyone wiring this into CI: an API 24 device cannot run
+`:embedded-mongodb:connectedDebugAndroidTest` at all, whatever the floor says. AGP installs through
+ddmlib's split installer, and `install-multiple` fails on Android 7.0 with `failed to finalize
+session`; it works from API 26 up. Below 26 the suite has to be driven by hand with
+`adb install -t -r` and `am instrument -w`, which is how the API 24 evidence above was gathered.
 
 One database is open per process. The engine refuses a second runtime, so an application keeps
 one `EmbeddedMongo` and uses database names inside it, exactly as it would against a server.

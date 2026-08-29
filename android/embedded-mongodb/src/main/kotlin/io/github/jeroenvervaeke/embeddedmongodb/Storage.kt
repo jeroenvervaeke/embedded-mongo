@@ -1,7 +1,6 @@
 package io.github.jeroenvervaeke.embeddedmongodb
 
 import android.content.Context
-import android.os.Build
 import android.os.storage.StorageManager
 import java.io.File
 import java.io.IOException
@@ -91,12 +90,11 @@ private fun bytesToOpen(options: StorageOptions): Long {
  * What the volume holding [directory] could give this application, or `null` when the platform
  * will not say.
  *
- * `getAllocatableBytes` arrived in API 26, two levels above this library's floor. The gap is
- * deliberately left unmeasured rather than filled with `usableSpace`, which ignores reclaimable
- * cache and would refuse to open where the engine would have succeeded.
+ * `getAllocatableBytes` arrived in API 26, which is this library's floor, so it is always there
+ * to call. `usableSpace` is deliberately not a fallback: it ignores reclaimable cache and would
+ * refuse to open where the engine would have succeeded.
  */
 internal fun allocatableBytes(context: Context, directory: File): Long? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
     val storage = context.getSystemService(StorageManager::class.java) ?: return null
     return try {
         storage.getAllocatableBytes(storage.getUuidForPath(directory))
