@@ -64,24 +64,41 @@ internal class FakeRunner(replies: List<Document>) : CommandRunner {
 }
 
 /**
- * An [Engine] that reports both free-disk floors as [mebibytes] and accepts every command, except
- * that a `setParameter` naming [refuse] is rejected the way an engine without that knob would.
+ * An [Engine] starting on [mebibytes] for both free-disk floors, which accepts every command and
+ * answers `getParameter` with whatever `setParameter` last wrote — except that a `setParameter`
+ * naming [refuse] is rejected the way an engine without that knob would.
+ *
+ * The floors are remembered rather than fixed because the open path turns on *when* it reads
+ * them: it has to record MongoDB's own before applying the caller's, or it records the caller's
+ * and hands it to the next open that asked for the default. A fake whose reply ignores what was
+ * set on it answers a read taken after a write exactly as one taken before, so no test written
+ * against it could tell those two apart.
  */
 internal fun engineReporting(
     mebibytes: Long,
     refuse: String? = null,
     closeFailure: Throwable? = null,
-) = FakeEngine(closeFailure) { command ->
-    when {
-        command.keys.first() == "getParameter" -> okReply(
-            "indexBuildMinAvailableDiskSpaceMB" to mebibytes,
-            "internalQuerySpillingMinAvailableDiskSpaceBytes" to mebibytes * 1024 * 1024,
-        )
-        refuse != null && command.containsKey(refuse) ->
-            Document("ok", 0.0).append("errmsg", "no such parameter $refuse")
-        else -> okReply()
+): FakeEngine {
+    var indexBuild = mebibytes
+    var querySpilling = mebibytes * 1024 * 1024
+    return FakeEngine(closeFailure) { command ->
+        when {
+            command.keys.first() == "getParameter" ->
+                okReply(INDEX_BUILD_FLOOR to indexBuild, QUERY_SPILLING_FLOOR to querySpilling)
+            refuse != null && command.containsKey(refuse) ->
+                Document("ok", 0.0).append("errmsg", "no such parameter $refuse")
+            else -> {
+                (command[INDEX_BUILD_FLOOR] as? Long)?.let { indexBuild = it }
+                (command[QUERY_SPILLING_FLOOR] as? Long)?.let { querySpilling = it }
+                okReply()
+            }
+        }
     }
 }
+
+private const val INDEX_BUILD_FLOOR = "indexBuildMinAvailableDiskSpaceMB"
+
+private const val QUERY_SPILLING_FLOOR = "internalQuerySpillingMinAvailableDiskSpaceBytes"
 
 internal fun guard(onMainThread: Boolean, report: (String) -> Unit = {}) =
     MainThreadGuard(onMainThread = { onMainThread }, report = report)

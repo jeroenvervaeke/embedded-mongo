@@ -18,8 +18,12 @@ import org.junit.runner.RunWith
  *
  * The JVM harnesses in the Rust crate prove the same two mechanisms against the host build, so
  * what is left for a device is that the new entry point is bound in the shared library the AAR
- * ships and that the Kotlin types encode what the engine reads. Every test opens its own
- * database, because only one engine may run in a process.
+ * ships and that the Kotlin types encode what the engine reads.
+ *
+ * Only one engine may run in a process, so a database is opened per test and closed before the
+ * next — and a test that wants two opens closes the first itself. The free-disk floors survive
+ * that close, being server parameters rather than anything belonging to a database, which is why
+ * no assertion here may assume it inherited a clean one.
  */
 @RunWith(AndroidJUnit4::class)
 class StorageOptionsInstrumentedTest {
@@ -68,6 +72,31 @@ class StorageOptionsInstrumentedTest {
     @Test
     fun aDatabaseOpenedWithoutOptionsRunsOnMongoDbsOwnFloor() {
         val floors = open(StorageOptions()).freeDiskFloorsBlocking()
+
+        assertEquals(ReportedFloors(500L, 500L * 1024 * 1024), floors)
+    }
+
+    /**
+     * The floors are process-global server parameters, so one this database lowered is still in
+     * force after its close — and the next open inherits it unless the open puts it back.
+     *
+     * This is what [aDatabaseOpenedWithoutOptionsRunsOnMongoDbsOwnFloor] cannot pin on its own:
+     * that one only meets a dirtied floor when the runner happens to schedule it after a test
+     * that lowered one, so it caught this defect on some orderings and not others. Here the dirty
+     * floor is the arrangement rather than an accident of ordering, so the assertion holds
+     * whatever runs before it and fails whenever the open stops establishing the floor.
+     */
+    @Test
+    fun aFloorLeftBehindByAClosedDatabaseDoesNotReachTheNextOne() {
+        val lowered = open(StorageOptions(freeDiskFloor = FreeDiskFloor.ofMebibytes(32)), "lowered")
+        assertEquals(
+            ReportedFloors(32L, 32L * 1024 * 1024),
+            lowered.freeDiskFloorsBlocking(),
+            "the floor to be left behind was never lowered, so this proves nothing",
+        )
+        lowered.close()
+
+        val floors = open(StorageOptions(), "inheriting").freeDiskFloorsBlocking()
 
         assertEquals(ReportedFloors(500L, 500L * 1024 * 1024), floors)
     }
@@ -128,8 +157,12 @@ class StorageOptionsInstrumentedTest {
         return reported
     }
 
-    private fun open(options: StorageOptions): EmbeddedMongo =
-        EmbeddedMongo.openBlocking(context, File(root, "main"), options).also { database = it }
+    /**
+     * [directory] is named so that a test opening twice gets two databases rather than a reopen
+     * of one, which would put a second thing on trial alongside the floor.
+     */
+    private fun open(options: StorageOptions, directory: String = "main"): EmbeddedMongo =
+        EmbeddedMongo.openBlocking(context, File(root, directory), options).also { database = it }
 
     private fun createIndex(): Document = Document("createIndexes", COLLECTION)
         .append("indexes", listOf(Document("key", Document("name", 1)).append("name", "name_1")))
