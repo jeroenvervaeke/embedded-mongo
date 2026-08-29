@@ -5,6 +5,16 @@
 //! already exists -- see `FreeDiskFloor.kt`. Nothing about them needs a native symbol, and a
 //! knob that needs no native symbol does not get one.
 //!
+//! That absence is now load-bearing, and a slot for the floor would be a defect rather than a
+//! feature. Both layers establish the floor at every open, each recording MongoDB's own floors
+//! at the first one -- `embedded_mongodb::FreeDiskFloor` and `FreeDiskFloorAtOpen.kt` say why.
+//! Because the floor never reaches this vector, every open through `Client::with_options` here
+//! names no floor, so the crate below has already put MongoDB's own back by the time the Kotlin
+//! layer takes its reading, and the two agree on what the defaults are. Route the floor through
+//! a slot and that stops holding: the crate would apply the caller's floor during the open, and
+//! the Kotlin layer would read it back and remember 32 MiB as MongoDB's own for the life of the
+//! process -- the very defect both layers exist to prevent.
+//!
 //! # Why a `long[]` and not four parameters
 //!
 //! The same reason `embedded_mongodb_open_options` carries its own `size`: one entry point has
