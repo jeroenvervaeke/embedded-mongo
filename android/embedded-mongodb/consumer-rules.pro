@@ -23,3 +23,15 @@
     @org.bson.codecs.pojo.annotations.BsonCreator <init>(...);
     @org.bson.codecs.pojo.annotations.BsonProperty <fields>;
 }
+
+# org.mongodb:bson ships an optional SLF4J logging backend, and org.bson.diagnostics.SLF4JLogger
+# holds an org.slf4j.Logger field naming it. Nothing here puts SLF4J on the classpath, so that
+# class is never loaded and the field is never read -- but R8 resolves the reference before it can
+# know that, and a dangling one fails the build outright:
+#
+#     Missing class org.slf4j.Logger (referenced from: org.bson.diagnostics.SLF4JLogger.delegate)
+#
+# Unreachable rather than merely unused, so warning about it buys a consumer nothing. It lives
+# here because bson is an `api` dependency of this library: every consumer that turns minification
+# on inherits the reference by our choice, and would otherwise have to rediscover this rule.
+-dontwarn org.slf4j.**
