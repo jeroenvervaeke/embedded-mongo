@@ -86,17 +86,35 @@ pub fn unpack_damaged(path: &Path) {
 /// a change users can see, and this is where that shows up.
 pub const MARKER: &str = ".embedded-mongodb-index-repair";
 
+/// Names the fixture directory when the compile-time path cannot be reached; see `fixture`.
+const FIXTURE_DIR: &str = "EMBEDDED_MONGODB_FIXTURE_DIR";
+
 pub fn marker_exists(path: &Path) -> bool {
     path.join(MARKER).is_file()
 }
 
-/// The committed fixture, found by walking up from whichever crate is compiling this file.
+/// Where the committed fixture is, on the machine running the test.
 ///
-/// Not `CARGO_MANIFEST_DIR` joined to the relative path: `embedded-mongodb-android/tests`
-/// includes this same file to prove the pass reaches the JNI bridge, and there the manifest
-/// directory is one level below the workspace root the fixture hangs off. Sharing the file is
-/// the point -- a second copy of the unpacking would drift from the fixture it unpacks.
+/// `EMBEDDED_MONGODB_FIXTURE_DIR` first, because everything below it is a compile-time path on
+/// the machine that *built* the test. A binary pushed to an Android emulator carries those
+/// paths with it and finds nothing there, so the on-device smoke test in `native.yml` pushes
+/// the fixture and names it through this variable.
+///
+/// Otherwise, walk up from whichever crate is compiling this file. Not `CARGO_MANIFEST_DIR`
+/// joined to the relative path: `embedded-mongodb-android/tests` includes this same file to
+/// prove the pass reaches the JNI bridge, and there the manifest directory is one level below
+/// the workspace root the fixture hangs off. Sharing the file is the point -- a second copy of
+/// the unpacking would drift from the fixture it unpacks.
 fn fixture() -> PathBuf {
+    if let Some(named) = std::env::var_os(FIXTURE_DIR) {
+        let named = PathBuf::from(named);
+        assert!(
+            named.is_dir(),
+            "{FIXTURE_DIR} names {}, which is not a directory",
+            named.display()
+        );
+        return named;
+    }
     let mut directory = Path::new(env!("CARGO_MANIFEST_DIR"));
     loop {
         let candidate = directory.join(FIXTURE);
