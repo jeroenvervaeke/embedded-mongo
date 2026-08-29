@@ -27,6 +27,9 @@ mod floor;
 mod knobs;
 mod process;
 
+#[cfg(test)]
+mod fake;
+
 pub use floor::FreeDiskFloor;
 pub use knobs::{IndexBuildFloor, QuerySpillingFloor, ReportedFloors};
 pub use process::ProcessLimits;

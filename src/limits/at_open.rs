@@ -46,6 +46,12 @@ use std::sync::{Mutex, PoisonError};
 /// A failure here fails the open. The half-built client is dropped on the way out, which
 /// closes the engine behind it -- only one runtime may exist per process, so an engine nobody
 /// holds a handle to is one this process could never open a database in again.
+///
+/// Which is why a floor half applied here is not put back, though
+/// [`ProcessLimits::set_free_disk_floor`](crate::ProcessLimits::set_free_disk_floor) does put
+/// one back: there is no engine left to read the floors from and no caller left to be misled by
+/// them. Putting them back would also mean putting back whatever the client that ran last left
+/// behind, which is the very thing this open exists to get away from.
 pub(crate) fn establish_free_disk_floor(
     client: &Client,
     requested: Option<FreeDiskFloor>,
@@ -124,18 +130,13 @@ impl EngineFloorDefaults {
 mod tests {
     use super::{EngineFloorDefaults, establish};
     use crate::{
-        Error, IndexBuildFloor, QuerySpillingFloor, Result,
+        Error, IndexBuildFloor, QuerySpillingFloor,
         limits::{
-            AdminCommands, FreeDiskFloor, ReportedFloors,
+            ReportedFloors,
+            fake::{DEFAULT_BYTES, DEFAULT_MEBIBYTES, FakeEngine, floor, floors_set},
             knobs::{INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR, send},
         },
     };
-    use bson::{Document, doc};
-    use std::cell::RefCell;
-
-    /// MongoDB's own floors, and the ones a fresh fake engine starts on.
-    const DEFAULT_MEBIBYTES: i64 = 500;
-    const DEFAULT_BYTES: i64 = DEFAULT_MEBIBYTES * 1024 * 1024;
 
     #[test]
     fn a_client_opened_without_a_floor_is_put_on_the_engines_own_floors() {
@@ -221,7 +222,7 @@ mod tests {
 
     /// The knobs are read back separately and can disagree, and the spilling one is a byte
     /// count that need not be a whole mebibyte -- so an open replays what was read rather than
-    /// a floor rounded through [`FreeDiskFloor`].
+    /// a floor rounded through [`FreeDiskFloor`](crate::FreeDiskFloor).
     #[test]
     fn floors_the_engine_reported_separately_are_put_back_separately() {
         let engine = FakeEngine::new(DEFAULT_MEBIBYTES, 123_456_789);
@@ -282,8 +283,8 @@ mod tests {
     }
 
     /// An engine whose floors moved after they were recorded is still put back on the
-    /// recorded ones, which is what makes a `set_free_disk_floor` on a running client last no
-    /// longer than the next open.
+    /// recorded ones, which is what makes a floor moved on a running client last no longer
+    /// than the next open.
     #[test]
     fn a_floor_moved_while_running_lasts_until_the_next_open() {
         let defaults = EngineFloorDefaults::new();
@@ -301,139 +302,5 @@ mod tests {
             IndexBuildFloor::from_mebibytes(DEFAULT_MEBIBYTES),
             QuerySpillingFloor::from_bytes(DEFAULT_BYTES),
         )
-    }
-
-    fn floor(mebibytes: u32) -> FreeDiskFloor {
-        FreeDiskFloor::from_mebibytes(mebibytes).expect("a floor inside the accepted range")
-    }
-
-    /// The two `setParameter` commands carrying these floors, spelled out here rather than
-    /// built by the code under test -- an expectation the production helper produced would
-    /// agree with itself.
-    fn floors_set(mebibytes: i64, bytes: i64) -> Vec<Document> {
-        vec![
-            doc! { "setParameter": 1, "indexBuildMinAvailableDiskSpaceMB": mebibytes },
-            doc! {
-                "setParameter": 1,
-                "internalQuerySpillingMinAvailableDiskSpaceBytes": bytes,
-            },
-        ]
-    }
-
-    /// An engine that answers `getParameter` with whatever `setParameter` last wrote.
-    ///
-    /// Remembering rather than fixed because this module turns on *when* the floors are read:
-    /// it has to record MongoDB's own before applying the caller's, or it records the
-    /// caller's and hands it to the next open that asked for the default. A fake whose reply
-    /// ignores what was set on it answers a read taken after a write exactly as one taken
-    /// before, so no test written against it could tell those two apart.
-    struct FakeEngine {
-        floors: RefCell<ReportedFloors>,
-        commands: RefCell<Vec<Document>>,
-        quirk: Quirk,
-    }
-
-    /// What one fake engine does that a healthy one would not. One at a time, because an
-    /// engine that both hid a knob and refused it would be two tests in one.
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Quirk {
-        None,
-        /// A knob this engine does not have, refused the way a renamed one would be.
-        Refuses(&'static str),
-        /// A knob this engine will not report, left out of every `getParameter` reply.
-        Hides(&'static str),
-        /// Floors that cannot be read at all, so a test can prove no read was taken.
-        NeverRead,
-    }
-
-    impl FakeEngine {
-        fn new(index_build_mebibytes: i64, query_spilling_bytes: i64) -> Self {
-            Self {
-                floors: RefCell::new(ReportedFloors::new(
-                    IndexBuildFloor::from_mebibytes(index_build_mebibytes),
-                    QuerySpillingFloor::from_bytes(query_spilling_bytes),
-                )),
-                commands: RefCell::new(Vec::new()),
-                quirk: Quirk::None,
-            }
-        }
-
-        fn reporting(mebibytes: i64) -> Self {
-            Self::new(mebibytes, mebibytes * 1024 * 1024)
-        }
-
-        /// An engine that fails the test if its floors are read, for proving that a later open
-        /// answers from what was recorded at the first one.
-        fn never_read() -> Self {
-            Self {
-                quirk: Quirk::NeverRead,
-                ..Self::reporting(DEFAULT_MEBIBYTES)
-            }
-        }
-
-        fn refusing(mut self, knob: &'static str) -> Self {
-            self.quirk = Quirk::Refuses(knob);
-            self
-        }
-
-        fn missing(mut self, knob: &'static str) -> Self {
-            self.quirk = Quirk::Hides(knob);
-            self
-        }
-
-        fn reported(&self) -> ReportedFloors {
-            *self.floors.borrow()
-        }
-
-        fn floors_set(&self) -> Vec<Document> {
-            self.commands
-                .borrow()
-                .iter()
-                .filter(|command| command.contains_key("setParameter"))
-                .cloned()
-                .collect()
-        }
-    }
-
-    impl AdminCommands for FakeEngine {
-        fn run_on_admin(&self, command: &Document) -> Result<Document> {
-            self.commands.borrow_mut().push(command.clone());
-            if command.contains_key("getParameter") {
-                assert!(
-                    self.quirk != Quirk::NeverRead,
-                    "the floors were read here rather than before the first floor moved"
-                );
-                let mut reply = doc! { "ok": 1.0 };
-                let floors = self.floors.borrow();
-                for (knob, value) in [
-                    (INDEX_BUILD_FLOOR, floors.index_build().mebibytes()),
-                    (QUERY_SPILLING_FLOOR, floors.query_spilling().bytes()),
-                ] {
-                    if self.quirk != Quirk::Hides(knob) {
-                        reply.insert(knob, value);
-                    }
-                }
-                return Ok(reply);
-            }
-            if let Quirk::Refuses(knob) = self.quirk
-                && command.contains_key(knob)
-            {
-                return Err(Error::Server {
-                    code: Some(72),
-                    message: format!("no such parameter {knob}"),
-                    response: Box::new(doc! { "ok": 0.0 }),
-                });
-            }
-            let mut floors = self.floors.borrow_mut();
-            *floors = ReportedFloors::new(
-                command
-                    .get_i64(INDEX_BUILD_FLOOR)
-                    .map_or(floors.index_build(), IndexBuildFloor::from_mebibytes),
-                command
-                    .get_i64(QUERY_SPILLING_FLOOR)
-                    .map_or(floors.query_spilling(), QuerySpillingFloor::from_bytes),
-            );
-            Ok(doc! { "ok": 1.0 })
-        }
     }
 }
