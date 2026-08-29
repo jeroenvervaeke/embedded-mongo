@@ -117,10 +117,14 @@ impl From<EmbeddedError> for BridgeError {
             // for a handle that never existed.
             //
             // `Native(Closed)` cannot occur -- the safe crate folds a closed native client
-            // into `Closed` -- but exhaustiveness has to name it, and naming it here rather
-            // than under a wildcard is what makes a new variant a compile error.
+            // into `Closed` -- and neither can `FreeDiskFloorNotRestored`: the floors are moved
+            // from Kotlin over `command`, and the only floor this layer's opens establish is
+            // MongoDB's own, which an open reports as it failed rather than putting back. Both
+            // are named anyway, because naming them here rather than under a wildcard is what
+            // makes a new variant a compile error.
             EmbeddedError::Bson(_)
             | EmbeddedError::Closed
+            | EmbeddedError::FreeDiskFloorNotRestored { .. }
             | EmbeddedError::InvalidArgument(_)
             | EmbeddedError::InvalidResponse(_)
             | EmbeddedError::Native(NativeError::Closed)

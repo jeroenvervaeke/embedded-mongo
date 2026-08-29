@@ -1,7 +1,7 @@
 //! Moving the free-disk floors on an engine that is already running.
 
 use super::{AdminCommands, FreeDiskFloor, ReportedFloors, knobs::reported_floors};
-use crate::{Client, Result};
+use crate::{Client, Error, Result};
 
 /// The limits that belong to this process rather than to the [`Client`] they are reached
 /// through.
@@ -60,7 +60,10 @@ impl<'client> ProcessLimits<'client> {
     /// first already moved -- downward, in the case that matters, where a caller who caught the
     /// error and concluded nothing had happened would go on to build an index against a floor
     /// far below the one it believes is protecting it. So the floors are put back where they
-    /// were, and a refusal leaves the engine as it was rather than half moved.
+    /// were, and a refusal leaves the engine as it was rather than half moved. If putting them
+    /// back fails too, the floors are ones nobody chose and that is a different error:
+    /// [`Error::FreeDiskFloorNotRestored`], which is worth catching separately by an application
+    /// that would rather refuse the work than do it against an unknown floor.
     pub fn set_free_disk_floor(&self, floor: FreeDiskFloor) -> Result<()> {
         move_free_disk_floor(self.client, floor)
     }
@@ -93,8 +96,8 @@ pub(crate) fn move_free_disk_floor(
 /// A refusal of the first command puts nothing back, because nothing has moved yet: a
 /// `setParameter` the engine answered `ok: 0` to is one it did not apply, and a failure of the
 /// engine itself is one no restore could reach either. Nor is the refused knob replayed --
-/// sending a command already known to be refused would report a floor as disturbed where in
-/// fact it is exactly where it was.
+/// sending a command already known to be refused would turn a floor that is exactly where it
+/// was into one this library reports as unknown.
 fn apply_or_put_back(
     engine: &impl AdminCommands,
     floor: FreeDiskFloor,
@@ -107,8 +110,14 @@ fn apply_or_put_back(
     let Err(cause) = engine.run_on_admin(&move_spilling) else {
         return Ok(());
     };
-    let _put_back = engine.run_on_admin(&put_index_build_back);
-    Err(cause)
+    Err(match engine.run_on_admin(&put_index_build_back) {
+        Ok(_) => cause,
+        Err(rollback) => Error::FreeDiskFloorNotRestored {
+            requested: floor,
+            cause: Box::new(cause),
+            rollback: Box::new(rollback),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -119,7 +128,7 @@ mod tests {
         limits::{
             ReportedFloors,
             fake::{DEFAULT_BYTES, DEFAULT_MEBIBYTES, FakeEngine, floor, floors_set},
-            knobs::{BYTES_PER_MEBIBYTE, QUERY_SPILLING_FLOOR},
+            knobs::{BYTES_PER_MEBIBYTE, INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR},
         },
     };
 
@@ -164,5 +173,52 @@ mod tests {
                      if message.contains(QUERY_SPILLING_FLOOR)),
             "{failure}"
         );
+    }
+
+    /// A refusal of the first command has moved nothing, so there is nothing to put back and the
+    /// caller gets the plain refusal rather than a report that the floors are unknown.
+    #[test]
+    fn a_move_the_engine_refuses_outright_is_not_reported_as_floors_nobody_chose() {
+        let engine = FakeEngine::reporting(DEFAULT_MEBIBYTES).refusing(INDEX_BUILD_FLOOR);
+
+        let failure = move_free_disk_floor(&engine, floor(32))
+            .expect_err("the engine refused the index build knob");
+
+        assert!(
+            matches!(&failure, Error::Server { message, .. }
+                     if message.contains(INDEX_BUILD_FLOOR)),
+            "{failure}"
+        );
+    }
+
+    /// An engine that stops taking parameters half way through leaves floors nobody chose, and
+    /// that is materially different from a request that failed: a caller who catches an ordinary
+    /// error reasonably assumes nothing happened.
+    #[test]
+    fn a_move_whose_retreat_also_fails_is_a_failure_of_its_own() {
+        let engine = FakeEngine::reporting(DEFAULT_MEBIBYTES).refusing_from(1);
+
+        let failure = move_free_disk_floor(&engine, floor(32))
+            .expect_err("the engine refused the move and the retreat");
+
+        assert!(
+            matches!(&failure, Error::FreeDiskFloorNotRestored { requested, .. }
+                     if *requested == floor(32)),
+            "{failure}"
+        );
+    }
+
+    /// Both reasons, because an application that has to decide whether to go on needs the one
+    /// the engine gave for the refusal and the one it gave for not taking the floors back.
+    #[test]
+    fn floors_nobody_chose_are_reported_with_both_reasons() {
+        let engine = FakeEngine::reporting(DEFAULT_MEBIBYTES).refusing_from(1);
+
+        let failure = move_free_disk_floor(&engine, floor(32))
+            .expect_err("the engine refused the move and the retreat");
+
+        let reported = failure.to_string();
+        assert!(reported.contains(QUERY_SPILLING_FLOOR), "{reported}");
+        assert!(reported.contains(INDEX_BUILD_FLOOR), "{reported}");
     }
 }

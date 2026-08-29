@@ -79,6 +79,13 @@ impl FakeEngine {
         self
     }
 
+    /// An engine that takes the parameters before the `nth` and refuses every one from it on,
+    /// counting from zero -- so a move can be failed and the retreat that follows it failed too.
+    pub(crate) fn refusing_from(mut self, nth: usize) -> Self {
+        self.quirk = Quirk::RefusesFrom(nth);
+        self
+    }
+
     pub(crate) fn missing(mut self, knob: &'static str) -> Self {
         self.quirk = Quirk::Hides(knob);
         self
@@ -114,6 +121,17 @@ impl FakeEngine {
         }
         reply
     }
+
+    /// The knob this engine will not take, if this command carries it.
+    fn refused(&self, command: &Document) -> Option<&'static str> {
+        let carried = knob_of(command)?;
+        match self.quirk {
+            Quirk::Refuses(knob) if knob == carried => Some(carried),
+            // Counting the one being answered, which is already recorded.
+            Quirk::RefusesFrom(nth) if self.floors_set().len() > nth => Some(carried),
+            _ => None,
+        }
+    }
 }
 
 impl AdminCommands for FakeEngine {
@@ -122,9 +140,7 @@ impl AdminCommands for FakeEngine {
         if command.contains_key("getParameter") {
             return Ok(self.read());
         }
-        if let Quirk::Refuses(knob) = self.quirk
-            && command.contains_key(knob)
-        {
+        if let Some(knob) = self.refused(command) {
             return Err(Error::Server {
                 code: Some(72),
                 message: format!("no such parameter {knob}"),
@@ -150,8 +166,18 @@ enum Quirk {
     None,
     /// A knob this engine does not have, refused the way a renamed one would be.
     Refuses(&'static str),
+    /// An engine that stops taking parameters from the nth one on, so that a move and the
+    /// retreat that follows it can both be refused.
+    RefusesFrom(usize),
     /// A knob this engine will not report, left out of every `getParameter` reply.
     Hides(&'static str),
     /// Floors that cannot be read at all, so a test can prove no read was taken.
     NeverRead,
+}
+
+/// Which of the two floors a `setParameter` command carries.
+fn knob_of(command: &Document) -> Option<&'static str> {
+    [INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR]
+        .into_iter()
+        .find(|knob| command.contains_key(knob))
 }
