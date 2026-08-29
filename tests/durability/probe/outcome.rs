@@ -7,9 +7,6 @@ use std::{collections::HashMap, os::unix::process::ExitStatusExt, process::ExitS
 /// depend on and which one constant does not justify adding.
 const SIGKILL: i32 = 9;
 
-/// SIGABRT, which is how the engine ends a process it cannot keep running.
-const SIGABRT: i32 = 6;
-
 /// Everything a finished child reported.
 pub struct Outcome {
     role: Role,
@@ -71,8 +68,29 @@ impl Outcome {
     /// A predicate rather than an assertion, because the probes that use it are pinning
     /// defects: each one has its own message explaining that a failure here means the engine
     /// was repaired, and a shared assertion could not say that.
+    ///
+    /// Any death counts, not `SIGABRT` alone. The defect is that the caller gets no `Error`
+    /// and the process goes down; which signal carries that is the platform's business. On
+    /// Android this probe died without `SIGABRT` -- bionic routes a crash through its own
+    /// handler -- and an assertion naming one signal reported the engine as repaired when it
+    /// had only died differently.
+    ///
+    /// The exchange is precision: a panic in the child now reads as the defect too. That is
+    /// worth it because the failure this pins is the process dying, and the alternative was a
+    /// probe that only recognises one platform's way of dying. A clean exit remains the one
+    /// outcome meaning the engine learned to report the failure -- which is what the probes
+    /// using this assert on, and why each names `ending()` in its message.
     pub fn was_aborted(&self) -> bool {
-        self.status.signal() == Some(SIGABRT)
+        !self.status.success()
+    }
+
+    /// How the child ended, for a message that has to explain an unexpected outcome.
+    pub fn ending(&self) -> String {
+        match (self.status.code(), self.status.signal()) {
+            (_, Some(signal)) => format!("killed by signal {signal}"),
+            (Some(code), None) => format!("exited with code {code}"),
+            (None, None) => "ended in a way this platform does not report".to_owned(),
+        }
     }
 
     /// The child ran to the end on its own: no panic, no signal, no abort.

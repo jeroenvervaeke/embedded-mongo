@@ -51,7 +51,8 @@ fn an_unwritable_database_directory_aborts_the_process() {
     assert!(
         outcome.was_aborted(),
         "an unwritable database directory no longer takes the process down — THE ENGINE HAS BEEN FIXED; make this \
-         probe assert that the open fails with an Error\n{}",
+         probe assert that the open fails with an Error\nthe child {}\n{}",
+        outcome.ending(),
         outcome.transcript()
     );
 }
