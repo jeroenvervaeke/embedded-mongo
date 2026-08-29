@@ -6,28 +6,17 @@ use embedded_mongodb_sys::{OutOfRange, check_range};
 
 /// How much free disk space an index build or a spilling query insists on before it starts.
 ///
-/// Worth choosing deliberately rather than as low as it will go: see the module note on what
-/// happens when a build actually runs out.
+/// Worth choosing deliberately rather than as low as it will go. The floor is a pre-flight
+/// check and nothing else: it refuses a build that would start with too little room, and
+/// nothing aborts one that runs out part-way. WiredTiger answers a genuinely full disk by
+/// panicking, which MongoDB answers with `fassert` -- the host process is gone without an error
+/// ever reaching the caller. So the floor is the only warning an application gets, and lowering
+/// it trades a refusal it can report for a crash it cannot. Lower it to what the work about to
+/// be done actually needs, not to what will fit.
 ///
-/// # It is process-global, not per-client
-///
-/// Both floors are MongoDB **server parameters**, and this engine keeps one runtime for the
-/// whole life of the process. A floor is therefore a setting of the *process*, not of the
-/// [`Client`](crate::Client) that named it: it survives that client's
-/// [`Client::close`](crate::Client::close), and left alone it would still be in force for the
-/// next open. That is not guessable from an API where the floor is named per-open, so this
-/// library does not leave it to be discovered -- **every open establishes the floor**, putting
-/// MongoDB's own back where the caller named none. An application that opens one database on a
-/// lowered floor, closes it and opens another gets the defaults it asked for rather than the
-/// previous database's floor.
-///
-/// Two consequences worth knowing. A floor moved with
-/// [`set_free_disk_floor`](crate::set_free_disk_floor) on a running client lasts until the next
-/// open, which resets it -- it is not remembered for a directory, so an application that wants
-/// it every time names it in
-/// [`OpenOptions::free_disk_floor`](crate::OpenOptions::free_disk_floor) rather than setting
-/// it afterwards. And while a client is open the floor is shared by every database name it
-/// serves, because there is only ever one engine to set it on.
+/// A floor is a setting of the *process* rather than of the client that named it, which is
+/// worth knowing before relying on one: [`ProcessLimits`](crate::ProcessLimits) has what that
+/// means, and is where a floor is moved on a client that is already open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FreeDiskFloor(u32);
 

@@ -17,44 +17,22 @@
 //! library does not.
 //!
 //! Being server parameters, the floors belong to the process rather than to a [`Client`], and
-//! outlive the client that moved them. [`at_open`] is where that is dealt with, and [`knobs`]
-//! is the pair of parameters underneath it.
+//! outlive the client that moved them. [`process`] is where a caller meets that, [`at_open`] is
+//! where every open is made to establish a floor because of it, and [`knobs`] is the pair of
+//! parameters underneath both.
 
 pub(crate) mod at_open;
 
 mod floor;
 mod knobs;
+mod process;
 
 pub use floor::FreeDiskFloor;
 pub use knobs::{IndexBuildFloor, QuerySpillingFloor, ReportedFloors};
+pub use process::ProcessLimits;
 
 use crate::{Client, Result};
 use bson::Document;
-use knobs::{reported_floors, send};
-
-/// Applies `floor` to the engine `client` has open, at any point in its life.
-///
-/// [`crate::Client::with_options`] calls this during `open`, which is the usual way to reach
-/// it. It is public as well because the floor is the one limit here that a caller may want to
-/// move while running -- raising it before a large build and dropping it afterwards.
-///
-/// What moves is a pair of server parameters belonging to the process rather than to this
-/// client -- see [`FreeDiskFloor`]. It reaches every database name the engine serves, and the
-/// next open puts it back to whatever that open asks for.
-///
-/// Failures are returned rather than logged: a caller who asked for a floor and did not get
-/// it would otherwise find out at the index build, on a device where the build is the thing
-/// that was supposed to work. An unknown parameter name comes back as `InvalidOptions` rather
-/// than being ignored, so a MongoDB that renames one of these is a loud error here.
-pub fn set_free_disk_floor(client: &Client, floor: FreeDiskFloor) -> Result<()> {
-    send(client, floor.commands())
-}
-
-/// What the engine says the two floors are now. Useful to a caller that wants to check what
-/// it is running with, and to the tests that pin it.
-pub fn free_disk_floors(client: &Client) -> Result<ReportedFloors> {
-    reported_floors(client)
-}
 
 /// The one thing the floors need of an open engine: a command on `admin`, and its reply.
 ///

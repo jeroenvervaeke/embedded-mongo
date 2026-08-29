@@ -175,7 +175,7 @@ The cache and the free-space floors are left where they were, and all four are s
 | Journal file size | 8 MiB (mongod: 100 MiB) | `Client::with_options` |
 | Journal pre-allocation | off (mongod: on) | `Client::with_options` |
 | WiredTiger cache | 256 MB | `Client::with_options` |
-| Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `set_free_disk_floor` at any time |
+| Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `Client::process_limits` at any time |
 
 The cache figure is the value this engine has always used, and is also the floor mongod will
 not go below on a server; mongod's *default* is half of system memory above the first
@@ -203,8 +203,16 @@ force at the next open. Every open therefore establishes the floor — the calle
 MongoDB's own otherwise, read from the engine before anything moved them. An application that
 opens one database on a lowered floor, closes it and opens another gets the defaults it asked
 for rather than the first database's floor. Two consequences: a floor moved with
-`set_free_disk_floor` on a running client lasts only until the next open, and while a client is
-open the floor is shared by every database name it serves.
+`client.process_limits().set_free_disk_floor(..)` on a running client lasts only until the next
+open, and while a client is open the floor is shared by every database name it serves.
+
+The handle is where the scope is named, because that is the scope the two floors have:
+
+```rust
+let limits = client.process_limits();
+limits.set_free_disk_floor(FreeDiskFloor::from_mebibytes(32)?)?;
+let now = limits.free_disk_floors()?;
+```
 
 The free-space floor is the one worth thinking about before lowering. It is what stops an index
 build or a spilling query from starting when the device is nearly full — and nothing stops one
