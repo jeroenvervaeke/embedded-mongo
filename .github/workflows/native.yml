@@ -507,6 +507,9 @@ jobs:
           # The engine is static-libc++, but the cxx bridge inside the test binary is not.
           sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib
           adb push "$sysroot/${{ matrix.target }}/libc++_shared.so" "$remote/"
+          # The repair probe unpacks a committed fixture whose location is a compile-time path
+          # on this runner. The device has no such directory, so push it and name it below.
+          adb push tests/fixtures "$remote/fixtures"
           for binary in "${binaries[@]}"; do
             name=$(basename "$binary")
             adb push "$binary" "$remote/$name"
@@ -519,7 +522,8 @@ jobs:
             # time as a path on the *build host*. On the device that path is not writable, so
             # every probe fails on it. This override is why the helper has one.
             adb shell "cd $remote && LD_LIBRARY_PATH=$remote TMPDIR=$remote \
-              EMBEDDED_MONGODB_PROBE_TMPDIR=$remote/probe ./$name \
+              EMBEDDED_MONGODB_PROBE_TMPDIR=$remote/probe \
+              EMBEDDED_MONGODB_FIXTURE_DIR=$remote/fixtures/damaged-reopen ./$name \
               --test-threads=1; echo exit=\$?" | tr -d '\r' | tee output.txt
             grep -qx 'exit=0' output.txt || { echo "$name failed on the device" >&2; exit 1; }
           done
