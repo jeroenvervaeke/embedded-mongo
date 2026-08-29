@@ -7,6 +7,9 @@
 //!
 //! One test function, because the engine is a process-global singleton.
 
+#[path = "scratch/mod.rs"]
+mod scratch;
+
 use embedded_mongodb::{
     Client, FreeDiskFloor, OpenOptions, ReportedFloors, bson::doc, free_disk_floors,
 };
@@ -23,7 +26,7 @@ const OUT_OF_DISK_SPACE: i64 = 14031;
 
 #[test]
 fn the_free_disk_floor_decides_whether_an_index_build_starts() {
-    let temporary = tempfile::tempdir().expect("a temporary directory");
+    let temporary = scratch::directory("storage-limits-");
     let path = temporary.path().join("database");
     let unreachable = FreeDiskFloor::from_mebibytes(MORE_THAN_ANY_DEVICE_HAS)
         .expect("4 TiB is inside the range the floor accepts");

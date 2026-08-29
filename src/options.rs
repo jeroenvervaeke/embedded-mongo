@@ -1,15 +1,22 @@
 //! Everything [`crate::Client::with_options`] can be told, in one object.
 //!
-//! Two of these reach the engine while WiredTiger is being opened and cannot be changed
-//! afterwards; the third is a pair of server parameters set on the running engine. The split
+//! Three of these reach the engine while WiredTiger is being opened and cannot be changed
+//! afterwards; the fourth is a pair of server parameters set on the running engine. The split
 //! matters to the implementation and not to the caller, so it is hidden here.
+//!
+//! Being server parameters, the floors belong to the process rather than to one client, so
+//! every open establishes them: naming no [`OpenOptions::free_disk_floor`] opens on MongoDB's
+//! own, not on whatever a client closed earlier in this process left behind. [`FreeDiskFloor`]
+//! has the whole of it. The other three carry no such history -- they are given to WiredTiger
+//! as it opens.
 
 use crate::limits::FreeDiskFloor;
 use embedded_mongodb_sys::{CacheSize, EngineOptions, JournalFileSize, Preallocation};
 
 /// Storage limits for [`crate::Client::with_options`]. Anything left unset keeps the engine's
 /// own default, so `Client::new(path)` and `Client::with_options(path, OpenOptions::new())`
-/// open identically.
+/// open identically -- the free-disk floor included, which an open has to establish rather
+/// than leave alone to make true.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OpenOptions {
     pub(crate) engine: EngineOptions,
@@ -40,7 +47,8 @@ impl OpenOptions {
     }
 
     /// How much free disk space an index build or a spilling query insists on. Read
-    /// [`FreeDiskFloor`] before lowering it.
+    /// [`FreeDiskFloor`] before lowering it: it is a server parameter of the whole process,
+    /// which is why it is named at every open rather than remembered for a directory.
     pub fn free_disk_floor(mut self, floor: FreeDiskFloor) -> Self {
         self.free_disk_floor = Some(floor);
         self
