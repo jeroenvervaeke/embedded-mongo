@@ -50,9 +50,13 @@ use std::sync::{Mutex, PoisonError};
 ///
 /// Which is why a floor half applied here is not put back, though
 /// [`ProcessLimits::set_free_disk_floor`](crate::ProcessLimits::set_free_disk_floor) does put
-/// one back: there is no engine left to read the floors from and no caller left to be misled by
-/// them. Putting them back would also mean putting back whatever the client that ran last left
-/// behind, which is the very thing this open exists to get away from.
+/// one back: there is no engine left to read the floors from, and no other client that could
+/// have one. `Runtime::Runtime` in `embedded-mongodb-sys/native/engine_runtime.cpp` refuses a
+/// second runtime outright -- `uassert` 13180000, "only one embedded MongoDB runtime may be
+/// open per process" -- so an open that got as far as this one is the only open there was, and
+/// the engine it is dropping is the only engine. Putting the floors back would also mean
+/// putting back whatever the client that ran last left behind, which is the very thing this
+/// open exists to get away from.
 pub(crate) fn establish_free_disk_floor(
     client: &Client,
     requested: Option<FreeDiskFloor>,
