@@ -8,46 +8,46 @@
 // and commits the result back.
 
 /// Release holding the assets below.
-const RELEASE_TAG: &str = "native-809d4cb2632b";
+const RELEASE_TAG: &str = "native-81be76197da4";
 /// Repository commit CI built them from. `build.rs` compares this checkout's native inputs
 /// against it and refuses to use a library that no longer matches.
-const SOURCE_COMMIT: &str = "f5859d5492e90cfdaf92ae9f291706c2ad52ae62";
+const SOURCE_COMMIT: &str = "1a7054941ba0b5ff47b9dbc60db9fa92f77ab69f";
 const BASE_URL: &str = "https://github.com/jeroenvervaeke/embedded-mongo/releases/download";
 
 static PREBUILT: &[Prebuilt] = &[
     Prebuilt {
         target: "aarch64-apple-darwin",
         asset: "libembedded_mongodb_native-aarch64-apple-darwin.so",
-        sha256: "932c60cb8c0d0a2869b9cb2100fb58c86d366bfae44f0a0d6d3783d0dad1ded4",
-        size: 72681152,
+        sha256: "ca41b131db8469ffa65d507f9a11d1fac6d9749d9dc4bfcd937ce353a5729cf4",
+        size: 72765216,
         glibc_min: None,
     },
     Prebuilt {
         target: "aarch64-linux-android",
         asset: "libembedded_mongodb_native-aarch64-linux-android.so",
-        sha256: "536d0d0274c87b5af8b54a49779629bd1bfefab5cd2081a40617b80cfc5c48c5",
-        size: 48548024,
+        sha256: "04b1a1dc0150915d58cd0b0bad4ad63b2e91bb2646d9791811bbf40ab42de5e9",
+        size: 48597784,
         glibc_min: None,
     },
     Prebuilt {
         target: "aarch64-unknown-linux-gnu",
         asset: "libembedded_mongodb_native-aarch64-unknown-linux-gnu.so",
-        sha256: "8a9ee0cb0e26f401033d45d645e6f99c8675a17a0febd53197430954142a4bc2",
-        size: 37387448,
+        sha256: "f80ece6a6605fd7bbeda1bcedc3262056edd53998700d242d3329cf886deb508",
+        size: 37453360,
         glibc_min: Some((2, 38)),
     },
     Prebuilt {
         target: "x86_64-linux-android",
         asset: "libembedded_mongodb_native-x86_64-linux-android.so",
-        sha256: "0cea533d6a834cfd77678c48d2db82af6ddb772503859121bb3c4aee60571414",
-        size: 48005976,
+        sha256: "f8c48cce50a42705b4934c71c54be4d3a882eac259fa20e590becad47e0abb65",
+        size: 48057080,
         glibc_min: None,
     },
     Prebuilt {
         target: "x86_64-unknown-linux-gnu",
         asset: "libembedded_mongodb_native-x86_64-unknown-linux-gnu.so",
-        sha256: "24cb2df963e7af23c2bb64fd4f3e5a92cf2c55ba3a99befbeaafb5a6341e6ec4",
-        size: 34525944,
+        sha256: "ae9b4a07772619d4ad877ac8b365ac6759499587b135ef52cc72692800dfa1ad",
+        size: 34571416,
         glibc_min: Some((2, 38)),
     },
 ];
