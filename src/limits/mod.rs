@@ -29,6 +29,8 @@ mod process;
 
 #[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod rendezvous;
 
 pub use floor::FreeDiskFloor;
 pub use knobs::{IndexBuildFloor, QuerySpillingFloor, ReportedFloors};

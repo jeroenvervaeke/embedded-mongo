@@ -2,18 +2,19 @@
 //!
 //! Shared by every test in this module rather than written twice: the floors are the process's,
 //! so the same fake has to serve the tests of an open and of a move on a running client. Every
-//! departure from a healthy engine is a [`Quirk`], one at a time, because an engine that both
-//! hid a knob and refused it would be two tests in one.
+//! departure from a healthy engine is a [`Quirk`], one at a time,
+//! because an engine that both hid a knob and refused it would be two tests in one.
 
 use crate::{
     Error, IndexBuildFloor, QuerySpillingFloor, Result,
     limits::{
         AdminCommands, FreeDiskFloor, ReportedFloors,
         knobs::{INDEX_BUILD_FLOOR, QUERY_SPILLING_FLOOR},
+        rendezvous::Rendezvous,
     },
 };
 use bson::{Document, doc};
-use std::cell::RefCell;
+use std::sync::{Mutex, PoisonError};
 
 /// MongoDB's own floors, and the ones a fresh fake engine starts on.
 pub(crate) const DEFAULT_MEBIBYTES: i64 = 500;
@@ -41,22 +42,24 @@ pub(crate) fn floors_set(mebibytes: i64, bytes: i64) -> Vec<Document> {
 /// has to record MongoDB's own before applying the caller's, or it records the caller's and
 /// hands it to the next open that asked for the default. A fake whose reply ignores what was set
 /// on it answers a read taken after a write exactly as one taken before, so no test written
-/// against it could tell those two apart. A move that has to put a floor back turns on the same
-/// thing from the other end: what it puts back is what it read.
+/// against it could tell those two apart.
+///
+/// Behind mutexes rather than `RefCell`s so that two threads can share one, which is what the
+/// serialisation of a floor move has to be proved against.
 pub(crate) struct FakeEngine {
-    floors: RefCell<ReportedFloors>,
-    commands: RefCell<Vec<Document>>,
+    floors: Mutex<ReportedFloors>,
+    commands: Mutex<Vec<Document>>,
     quirk: Quirk,
 }
 
 impl FakeEngine {
     pub(crate) fn new(index_build_mebibytes: i64, query_spilling_bytes: i64) -> Self {
         Self {
-            floors: RefCell::new(ReportedFloors::new(
+            floors: Mutex::new(ReportedFloors::new(
                 IndexBuildFloor::from_mebibytes(index_build_mebibytes),
                 QuerySpillingFloor::from_bytes(query_spilling_bytes),
             )),
-            commands: RefCell::new(Vec::new()),
+            commands: Mutex::new(Vec::new()),
             quirk: Quirk::None,
         }
     }
@@ -91,22 +94,30 @@ impl FakeEngine {
         self
     }
 
+    pub(crate) fn pausing_in_the_index_build_knob(mut self) -> Self {
+        self.quirk = Quirk::Pauses(Rendezvous::new());
+        self
+    }
+
     pub(crate) fn reported(&self) -> ReportedFloors {
-        *self.floors.borrow()
+        *self.floors.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn floors_set(&self) -> Vec<Document> {
-        self.commands
-            .borrow()
+        self.sent()
             .iter()
             .filter(|command| command.contains_key("setParameter"))
             .cloned()
             .collect()
     }
 
+    fn sent(&self) -> std::sync::MutexGuard<'_, Vec<Document>> {
+        self.commands.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn read(&self) -> Document {
         assert!(
-            self.quirk != Quirk::NeverRead,
+            !matches!(self.quirk, Quirk::NeverRead),
             "the floors were read here rather than before the first floor moved"
         );
         let floors = self.reported();
@@ -115,8 +126,11 @@ impl FakeEngine {
             (INDEX_BUILD_FLOOR, floors.index_build().mebibytes()),
             (QUERY_SPILLING_FLOOR, floors.query_spilling().bytes()),
         ] {
-            if self.quirk != Quirk::Hides(knob) {
-                reply.insert(knob, value);
+            match &self.quirk {
+                Quirk::Hides(hidden) if *hidden == knob => {}
+                _ => {
+                    reply.insert(knob, value);
+                }
             }
         }
         reply
@@ -132,14 +146,25 @@ impl FakeEngine {
             _ => None,
         }
     }
+
+    /// Holds the thread inside the index-build knob until a second mover reaches it, so that a
+    /// pair of moves which is not serialised interleaves here rather than by luck.
+    fn pause(&self, command: &Document) {
+        if let Quirk::Pauses(rendezvous) = &self.quirk
+            && command.contains_key(INDEX_BUILD_FLOOR)
+        {
+            rendezvous.wait_for_another();
+        }
+    }
 }
 
 impl AdminCommands for FakeEngine {
     fn run_on_admin(&self, command: &Document) -> Result<Document> {
-        self.commands.borrow_mut().push(command.clone());
+        self.sent().push(command.clone());
         if command.contains_key("getParameter") {
             return Ok(self.read());
         }
+        self.pause(command);
         if let Some(knob) = self.refused(command) {
             return Err(Error::Server {
                 code: Some(72),
@@ -147,7 +172,7 @@ impl AdminCommands for FakeEngine {
                 response: Box::new(doc! { "ok": 0.0 }),
             });
         }
-        let mut floors = self.floors.borrow_mut();
+        let mut floors = self.floors.lock().unwrap_or_else(PoisonError::into_inner);
         *floors = ReportedFloors::new(
             command
                 .get_i64(INDEX_BUILD_FLOOR)
@@ -161,7 +186,6 @@ impl AdminCommands for FakeEngine {
 }
 
 /// What one fake engine does that a healthy one would not.
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Quirk {
     None,
     /// A knob this engine does not have, refused the way a renamed one would be.
@@ -173,6 +197,8 @@ enum Quirk {
     Hides(&'static str),
     /// Floors that cannot be read at all, so a test can prove no read was taken.
     NeverRead,
+    /// An index-build knob slow enough that a second mover has time to reach it.
+    Pauses(Rendezvous),
 }
 
 /// Which of the two floors a `setParameter` command carries.
