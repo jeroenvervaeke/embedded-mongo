@@ -20,22 +20,6 @@ use std::sync::{Mutex, PoisonError};
 pub(crate) const DEFAULT_MEBIBYTES: i64 = 500;
 pub(crate) const DEFAULT_BYTES: i64 = DEFAULT_MEBIBYTES * 1024 * 1024;
 
-pub(crate) fn floor(mebibytes: u32) -> FreeDiskFloor {
-    FreeDiskFloor::from_mebibytes(mebibytes).expect("a floor inside the accepted range")
-}
-
-/// The two `setParameter` commands carrying these floors, spelled out here rather than built by
-/// the code under test -- an expectation the production helper produced would agree with itself.
-pub(crate) fn floors_set(mebibytes: i64, bytes: i64) -> Vec<Document> {
-    vec![
-        doc! { "setParameter": 1, "indexBuildMinAvailableDiskSpaceMB": mebibytes },
-        doc! {
-            "setParameter": 1,
-            "internalQuerySpillingMinAvailableDiskSpaceBytes": bytes,
-        },
-    ]
-}
-
 /// An engine that answers `getParameter` with whatever `setParameter` last wrote.
 ///
 /// Remembering rather than fixed because these tests turn on *when* the floors are read: an open
@@ -167,6 +151,22 @@ impl FakeEngine {
             rendezvous.wait_for_another();
         }
     }
+}
+
+pub(crate) fn floor(mebibytes: u32) -> FreeDiskFloor {
+    FreeDiskFloor::from_mebibytes(mebibytes).expect("a floor inside the accepted range")
+}
+
+/// The two `setParameter` commands carrying these floors, spelled out here rather than built by
+/// the code under test -- an expectation the production helper produced would agree with itself.
+pub(crate) fn floors_set(mebibytes: i64, bytes: i64) -> Vec<Document> {
+    vec![
+        doc! { "setParameter": 1, "indexBuildMinAvailableDiskSpaceMB": mebibytes },
+        doc! {
+            "setParameter": 1,
+            "internalQuerySpillingMinAvailableDiskSpaceBytes": bytes,
+        },
+    ]
 }
 
 impl AdminCommands for FakeEngine {
