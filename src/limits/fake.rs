@@ -1,8 +1,8 @@
 //! An engine the floors can be tested against without one being started.
 //!
 //! Shared by every test in this module rather than written twice: the floors are the process's,
-//! so the same fake has to serve the tests of an open and of a move on a running client. Every
-//! departure from a healthy engine is a [`Quirk`], one at a time,
+//! so the same fake has to serve the tests of an open, of a move on a running client, and of the
+//! knobs themselves. Every departure from a healthy engine is a [`Quirk`], one at a time,
 //! because an engine that both hid a knob and refused it would be two tests in one.
 
 use crate::{
@@ -53,6 +53,9 @@ pub(crate) struct FakeEngine {
 }
 
 impl FakeEngine {
+    /// What a mistyped knob is answered with, so that a test can insist the failure names it.
+    pub(crate) const MISTYPED_AS: &str = "not a number at all";
+
     pub(crate) fn new(index_build_mebibytes: i64, query_spilling_bytes: i64) -> Self {
         Self {
             floors: Mutex::new(ReportedFloors::new(
@@ -94,6 +97,11 @@ impl FakeEngine {
         self
     }
 
+    pub(crate) fn mistyping(mut self, knob: &'static str) -> Self {
+        self.quirk = Quirk::Mistypes(knob);
+        self
+    }
+
     pub(crate) fn pausing_in_the_index_build_knob(mut self) -> Self {
         self.quirk = Quirk::Pauses(Rendezvous::new());
         self
@@ -128,6 +136,9 @@ impl FakeEngine {
         ] {
             match &self.quirk {
                 Quirk::Hides(hidden) if *hidden == knob => {}
+                Quirk::Mistypes(mistyped) if *mistyped == knob => {
+                    reply.insert(knob, Self::MISTYPED_AS);
+                }
                 _ => {
                     reply.insert(knob, value);
                 }
@@ -195,6 +206,8 @@ enum Quirk {
     RefusesFrom(usize),
     /// A knob this engine will not report, left out of every `getParameter` reply.
     Hides(&'static str),
+    /// A knob this engine reports as something other than the integer it holds.
+    Mistypes(&'static str),
     /// Floors that cannot be read at all, so a test can prove no read was taken.
     NeverRead,
     /// An index-build knob slow enough that a second mover has time to reach it.

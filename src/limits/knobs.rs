@@ -8,7 +8,7 @@
 
 use super::AdminCommands;
 use crate::{Error, Result};
-use bson::{Document, doc};
+use bson::{Bson, Document, doc};
 
 /// How much free disk an index build insists on before it starts, in mebibytes.
 ///
@@ -137,18 +137,29 @@ pub(crate) fn send(engine: &impl AdminCommands, commands: [Document; 2]) -> Resu
 /// A missing knob is raised rather than defaulted: a MongoDB that renamed one of these would
 /// otherwise report a floor this library never set, and a caller would size its work against a
 /// number that is not the one in force.
+///
+/// A knob that is present but holds something else is a different failure and says so, naming
+/// what came back. Reporting it as absent would be false, and would send whoever has to fix it
+/// looking for a knob the reply plainly contains.
 fn floor_in(reported: &Document, knob: &str) -> Result<i64> {
-    reported
-        .get_i64(knob)
-        .map_err(|_| Error::InvalidResponse(format!("getParameter has no {knob}")))
+    match reported.get(knob) {
+        Some(Bson::Int64(floor)) => Ok(*floor),
+        Some(found) => Err(Error::InvalidResponse(format!(
+            "getParameter answered {knob} with {found:?}, not the 64-bit integer the knob holds"
+        ))),
+        None => Err(Error::InvalidResponse(format!(
+            "getParameter has no {knob}"
+        ))),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         INDEX_BUILD_FLOOR, IndexBuildFloor, QUERY_SPILLING_FLOOR, QuerySpillingFloor,
-        ReportedFloors,
+        ReportedFloors, reported_floors,
     };
+    use crate::{Error, limits::fake::FakeEngine};
 
     /// The spilling knob is a byte count the engine need not report as a whole mebibyte, so what
     /// was read has to go back as it was read rather than through
@@ -165,6 +176,48 @@ mod tests {
         assert_eq!(
             spilling.get_i64(QUERY_SPILLING_FLOOR).ok(),
             Some(123_456_789)
+        );
+    }
+
+    #[test]
+    fn a_knob_the_engine_leaves_out_is_reported_as_missing() {
+        let engine = FakeEngine::reporting(500).missing(QUERY_SPILLING_FLOOR);
+
+        let failure = reported_floors(&engine).expect_err("a knob that is not there");
+
+        assert!(
+            matches!(&failure, Error::InvalidResponse(message)
+                     if message.contains(QUERY_SPILLING_FLOOR) && message.contains("has no")),
+            "{failure}"
+        );
+    }
+
+    /// The defect: a knob answered with the wrong type used to be reported as one the reply did
+    /// not contain, which is false and sends the reader looking for the wrong thing.
+    #[test]
+    fn a_knob_the_engine_answers_with_something_else_is_not_reported_as_missing() {
+        let engine = FakeEngine::reporting(500).mistyping(INDEX_BUILD_FLOOR);
+
+        let failure = reported_floors(&engine).expect_err("a knob holding the wrong type");
+
+        assert!(
+            matches!(&failure, Error::InvalidResponse(message)
+                     if !message.contains("has no")),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn a_knob_the_engine_answers_with_something_else_reports_what_came_back() {
+        let engine = FakeEngine::reporting(500).mistyping(INDEX_BUILD_FLOOR);
+
+        let failure = reported_floors(&engine).expect_err("a knob holding the wrong type");
+
+        assert!(
+            matches!(&failure, Error::InvalidResponse(message)
+                     if message.contains(INDEX_BUILD_FLOOR)
+                        && message.contains(FakeEngine::MISTYPED_AS)),
+            "{failure}"
         );
     }
 }
