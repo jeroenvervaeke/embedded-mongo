@@ -126,12 +126,29 @@ class EmbeddedMongoInstrumentedTest {
     @Test
     fun droppingACollectionThatIsNotThereIsTheStateTheCallerAskedFor() = runBlocking {
         // A collection nothing has written to does not exist, and MongoDB reports dropping one as
-        // a failure. `drop` reads that code and answers the question that was asked, as the driver
-        // does -- while `dropIndex` reports it, also as the driver does.
+        // a failure. `drop` reads that code and answers the question that was asked, as the
+        // driver does.
         mongo.getDatabase(DATABASE).getCollection("never-written").drop()
+    }
 
-        val failure = assertFailsWith<EmbeddedMongoException> { orders.dropIndex("no_such_index") }
-        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, failure.code)
+    @Test
+    fun droppingAnIndexSaysWhichOfTheTwoThingsWasMissing() = runBlocking {
+        // Both are reported rather than swallowed, as the driver reports them -- but they are
+        // different reports, and only the engine can say which: a fake answers with whichever
+        // code it was told to. The collection has to exist before the engine looks for an index
+        // at all, so an index dropped from a collection nothing ever wrote to is a missing
+        // *namespace* rather than a missing index.
+        val missingCollection = assertFailsWith<EmbeddedMongoException> {
+            mongo.getDatabase(DATABASE).getCollection("never-written").dropIndex("no_such_index")
+        }
+        assertEquals(MongoErrorCode.NAMESPACE_NOT_FOUND, missingCollection.code)
+
+        orders.insertOne(Document("value", "first"))
+
+        val missingIndex = assertFailsWith<EmbeddedMongoException> {
+            orders.dropIndex("no_such_index")
+        }
+        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, missingIndex.code)
     }
 
     @Test
