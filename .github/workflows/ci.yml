@@ -256,6 +256,31 @@ jobs:
         # for both ABIs, so a bridge that stopped compiling fails here too.
         run: ./gradlew build
 
+      - name: Free disk space for the emulator
+        # An API 35 AVD asks for 7.2 GB of userdata before it will start, and a stock
+        # ubuntu-24.04 runner has about 6.4 GB left once the SDK, the NDK, the system image and
+        # this build's own output are on it -- so the emulator dies with "Not enough space to
+        # create userdata partition" before a single test runs.
+        #
+        # Capping the partition instead was tried twice and did not work: `-partition-size` sizes
+        # the system partition, and `disk.dataPartition.size` in the AVD's config.ini was written,
+        # logged, and ignored -- the emulator went on asking for the same 7372.80 MB. Reclaiming
+        # the space settles it without depending on a setting this emulator does not honour.
+        #
+        # None of these belong to this build. $AGENT_TOOLSDIRECTORY is deliberately left alone:
+        # setup-java put the JDK Gradle needs in it, and the emulator step runs Gradle.
+        run: |
+          set -euo pipefail
+          df -h / | tail -1
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+
       - name: Run the instrumented tests on an emulator
         working-directory: android
         timeout-minutes: 30

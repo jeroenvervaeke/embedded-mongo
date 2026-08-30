@@ -6,24 +6,25 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.bson.Document
 
 /**
- * A MongoDB database running inside the application process, stored in one directory.
- *
- * Commands are the whole API: the engine speaks the same command language as a server, so
- * `find`, `insert`, `aggregate` and the rest are [Document]s built by the caller.
+ * A MongoDB running inside the application process, stored in one directory.
  *
  * ```
- * // Inside a coroutine: opening, running a command and collecting all suspend.
- * val database = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
- * database.command("shop", Document("insert", "orders").append("documents", listOf(order)))
- * database.documents("shop", Document("find", "orders")).collect(::render)
+ * val mongo = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
+ * val orders = mongo.getDatabase("shop").getCollection("orders")
+ *
+ * orders.insertOne(Document("customer", "ada").append("total", 12))
+ * orders.createIndex(Indexes.ascending("customer"))
+ * val hers = orders.find(Document("customer", "ada")).sort(Document("total", -1)).toList()
  * ```
+ *
+ * [getDatabase] is the way in, and [MongoDatabase] and [MongoCollection] are where the API is: find,
+ * aggregate, insert, update, delete, count and index, with cursors paged for the caller. This
+ * class is the engine and its lifecycle — opening it, closing it, and running a command that has
+ * no builder above it.
  *
  * How much room the engine may take is [StorageOptions], named at [open]. The defaults are sized
  * for a phone, so an application that names nothing is not left with a server's appetite; the one
@@ -45,7 +46,7 @@ import org.bson.Document
 class EmbeddedMongo internal constructor(
     private val engine: Engine,
     private val guard: MainThreadGuard,
-) : AutoCloseable {
+) : AutoCloseable, CommandRunner {
     // One thread rather than a pool: the engine runs every command on a single internal strand, so
     // extra threads would queue behind the first one while costing a stack each. A single thread
     // also gives suspending callers the ordering they would get from one connection to a server.
@@ -58,17 +59,32 @@ class EmbeddedMongo internal constructor(
     private var closed = false
 
     /**
+     * The database called [name], which is where the collections and the queries are.
+     *
+     * Nothing is created and no command is sent: naming a database that holds nothing is free, and
+     * it starts existing when something is written into it.
+     *
+     * `getDatabase` rather than `database` because that is what `MongoClient` is called on in the
+     * official Java and Kotlin drivers, and code pasted from either should compile here.
+     */
+    fun getDatabase(name: String): MongoDatabase = MongoDatabase(this, name)
+
+    /**
      * Runs [command] against [database] on the database thread and returns its reply.
+     *
+     * The primitive every collection and query is built from, and the last resort for a command
+     * none of them cover. Prefer [getDatabase] and the API on [MongoDatabase]: it names the
+     * database once, checks the replies, and pages the cursors.
      *
      * @throws EmbeddedMongoException if the engine reports the command as failed.
      * @throws IllegalStateException if called after [close].
      */
-    suspend fun command(database: String, command: Document): Document {
+    override suspend fun runCommand(database: String, command: Document): Document {
         // Checked before dispatching as well as inside the command: once the database thread is
         // shut down, dispatching onto it cancels the caller's job, and a CancellationException
         // would tell them far less than this does.
         checkOpen()
-        return withContext(dispatcher) { commandBlocking(database, command) }
+        return withContext(dispatcher) { runCommandBlocking(database, command) }
     }
 
     /**
@@ -80,35 +96,12 @@ class EmbeddedMongo internal constructor(
      * @throws EmbeddedMongoException if the engine reports the command as failed.
      * @throws IllegalStateException if called on the main thread, or after [close].
      */
-    fun commandBlocking(database: String, command: Document): Document {
+    fun runCommandBlocking(database: String, command: Document): Document {
         guard.reject("Running a MongoDB command")
         checkOpen()
         val encoded = BsonCodec.encode(durable(command))
         return checkedReply(BsonCodec.decode(engine.command(database, encoded)))
     }
-
-    /**
-     * Runs a cursor-returning [command] and emits every document it produces, fetching further
-     * batches on the database thread as the collector consumes them.
-     *
-     * A collector that stops early — `take`, a cancelled scope, an exception — closes the cursor
-     * on the way out, so the engine is not left holding one.
-     */
-    fun documents(database: String, command: Document): Flow<Document> = flow {
-        checkOpen()
-        cursor(database, command).use { cursor -> cursor.forEach { document -> emit(document) } }
-    }.flowOn(dispatcher)
-
-    /**
-     * Runs a cursor-returning [command] on the calling thread and returns its documents.
-     *
-     * The returned sequence issues `getMore` as it is consumed, so it must be [closed]
-     * [DocumentCursor.close] if it is not consumed to the end.
-     *
-     * @throws IllegalStateException if called on the main thread, or after [close].
-     */
-    fun cursor(database: String, command: Document): DocumentCursor =
-        DocumentCursor(::commandBlocking, database, commandBlocking(database, command))
 
     /**
      * Closes the database, waiting for a command already running on another thread to finish.

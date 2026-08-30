@@ -4,22 +4,171 @@ The Android library: MongoDB running inside the application process, with no ser
 and no `mongod` to install. It wraps the `embedded-mongodb-android` Rust crate in a Kotlin API and
 packages both into an AAR.
 
-The Kotlin side is a thin one. The engine speaks the same command language as a server, so the API
-is commands in, replies out, plus the paging a cursor needs.
-
 ```kotlin
-// Inside a coroutine: opening, running a command and collecting all suspend, and all three run
-// on the library's own database thread rather than on the caller's.
-val database = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
+// Inside a coroutine: opening and every query suspend, and all of them run on the library's own
+// database thread rather than on the caller's.
+val mongo = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
+val orders = mongo.getDatabase("shop").getCollection("orders")
 
-database.command("shop", Document("insert", "orders").append("documents", listOf(order)))
+orders.insertOne(Document("customer", "ada").append("total", 12).append("paid", false))
+orders.createIndex(Indexes.ascending("customer"))
 
-database.documents("shop", Document("find", "orders").append("filter", Document("paid", true)))
-    .collect(::render)
+val unpaid = orders.find(Document("paid", false))
+    .sort(Document("total", -1))
+    .limit(20)
+    .toList()
 ```
 
 An instance is meant to outlive a single screen — open it once, keep it for as long as the data is
 in use, and `close()` it off the main thread when it is not.
+
+## Two modules, one dependency
+
+| | |
+| --- | --- |
+| `:embedded-mongodb-core` | plain Kotlin: databases, collections, queries, cursor paging, and the commands they build |
+| `:embedded-mongodb` | the AAR: the engine, the JNI bridge, opening, closing, storage limits, and the main-thread guard |
+
+An application depends on the AAR alone — it re-exports the core module, so the whole API arrives
+with it. The split is what lets a plain-Kotlin module of an application build a query without
+taking on the Android SDK or a compiled engine, and it is why the query layer is tested on the JVM.
+
+## Databases, collections and queries
+
+The seam between the two modules is one interface, and every collection and query in the library
+is written against it:
+
+```kotlin
+fun interface CommandRunner {
+    suspend fun runCommand(database: String, command: Document): Document
+}
+```
+
+`EmbeddedMongo` is the implementation that reaches the engine. `MongoDatabase(runner, name)` has a
+public constructor, so a test — or a wrapper that traces, logs or retries — gets the whole query
+API with five lines of its own.
+
+**On a collection.** `find`, `aggregate`, `distinct`, `countDocuments`,
+`estimatedDocumentCount`, `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,
+`findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`,
+`createIndex`, `createIndexes`, `listIndexes`, `dropIndex`, `drop`.
+
+**On a database.** `getCollection`, `listCollectionNames`, `createCollection`, `drop`.
+
+The names are the driver's names and so is the behaviour, including where MongoDB reports "there
+was nothing to do": `drop` on a collection or database that is not there is a no-op, while
+`createCollection` on one that exists and `dropIndex` on an index that does not are failures
+carrying [MongoErrorCode] values to catch. That is what the Java and Kotlin drivers do, and an
+application using create-or-fail as a race guard needs it.
+
+All but `find`, `aggregate` and the two `runCommand`s are extension functions rather than members,
+and the rule is worth knowing because it is the one an application's own operations follow: a
+member is what needs the collection's private command runner, and everything else is written on
+`runCommand` exactly as you would write one. From Java they are static methods on
+`MongoCollections`.
+
+`findOneAndUpdate` and `findOneAndDelete` are the only atomic read-modify-writes here, which is
+why they exist rather than being left to `runCommand`: an `updateOne` followed by a `find` is two
+commands, and two coroutines really do interleave between them.
+
+`find` and `aggregate` return a query rather than results. Nothing reaches the engine until it is
+collected, every method on it returns a new query rather than changing the one it was called on,
+and `command()` reports what would be sent — which is what an application shows when it wants to
+prove that the pipeline on the screen is the pipeline that ran.
+
+A query **is** a `Flow<Document>`, as the driver's `FindFlow` and `AggregateFlow` are, so it can
+be collected directly and every `Flow` operator applies:
+
+```kotlin
+val paid = orders.find(Document("paid", true))
+val newest = paid.sort(Document("placed", -1)).limit(10).toList()
+paid.collect(::render)                        // it is the flow; no asFlow() needed
+val mine = paid.asFlow(Document::toOrder)     // parsed as it arrives
+```
+
+There is no `Collection<T>`. `asFlow(read)` is the whole of the typed story: parsing is a function
+from a `Document`, and where a document becomes a domain object is a boundary an application owns
+anyway. The machinery for a generic parameter is available — `PojoCodecProvider` and
+`CodecRegistries` are in `org.mongodb:bson`, which is already a dependency — so this is a choice
+rather than a limitation: a codec registry is a second way to describe a document, and the one
+place it would earn its keep, Kotlin data classes, is the place the POJO codec handles worst.
+
+`insertOne` and `insertMany` generate an `ObjectId` for a document that names no `_id`, and report
+what each document was stored under. Writes are journalled — see [Durability](#durability).
+
+`drop`, `dropIndex` and `createCollection` treat MongoDB's "there was nothing to do" codes as
+success: asking for a collection to be gone when it is already gone is not a failure.
+
+### Filters, sorts, projections and updates
+
+Every one of them is an `org.bson.conversions.Bson`. `Document` implements it, so
+`Document("paid", true)` is a filter and nothing else is needed:
+
+```kotlin
+orders.updateMany(Document("paid", false), Document("\$set", Document("paid", true)))
+```
+
+It is also what the official driver's `Filters`, `Sorts`, `Projections`, `Updates`, `Aggregates`
+and `Accumulators` builders return, so an application can add `org.mongodb:mongodb-driver-core` to
+its own dependencies and use them at the same call sites — this library does not depend on the
+driver to make that work.
+
+**Adding it is the recommendation rather than an aside**, and pipelines are why. Kotlin gives `$`
+to string templates, so every MongoDB operator written as a literal has to be escaped:
+`Document("\$match", Document("total", Document("\$lte", 20)))`. One is tolerable; an
+aggregation pipeline is a dozen. `Aggregates.match(Filters.lte("total", 20))` says the same thing
+and cannot be got wrong by a missing backslash.
+
+The one builder here is `Indexes`, because an index key specification is the part that is easy to
+get quietly wrong: `Document("loc", "2dsphere")` and `Document("loc", 1)` differ by a value rather
+than by a keyword, and the second builds an index `$geoNear` will not use.
+
+```kotlin
+places.createIndexes(
+    listOf(
+        IndexModel(Indexes.geo2dsphere("loc")),
+        IndexModel(Indexes.text("name", "brand"), IndexOptions(weights = Document("name", 10))),
+    ),
+)
+```
+
+### Errors
+
+One exception, `EmbeddedMongoException`, carrying MongoDB's own error code — so the check a
+MongoDB developer already knows is the check to write:
+
+```kotlin
+try {
+    orders.insertOne(order)
+} catch (failure: EmbeddedMongoException) {
+    if (failure.code != MongoErrorCode.DUPLICATE_KEY) throw failure
+}
+```
+
+`response` is the whole reply the engine sent, and `writeErrors` reads the per-document failures
+out of it. That is what makes `insertMany(ordered = false)` worth asking for: the engine carries
+on past a document it rejects, so the exception holds every rejection rather than only the one
+that stopped the batch, and `response["n"]` says how many went in regardless.
+
+A negative `code` is the bridge rather than MongoDB — `bridgeError` names it — and
+`NO_ERROR_CODE` means this library raised the failure itself, which it does for a reply it cannot
+parse.
+
+### When none of it fits
+
+`MongoDatabase.runCommand`, `MongoCollection.runCommand` and their `runCursorCommand` siblings send
+a command written by hand and hand back the reply — `collStats`, `explain`, `distinct`, a command
+MongoDB grew after this library did. `EmbeddedMongo.runCommand` and `runCommandBlocking` are the
+same thing one level down, naming the database at the call site. They are the last resort rather
+than the API, but everything above them ends up there too, so a command written by hand is not a
+lesser citizen — only an unchecked one.
+
+`explain` is the one worth spelling out, because `command()` makes it a one-liner:
+
+```kotlin
+val query = orders.find(Document("paid", true)).sort(Document("placed", -1))
+val plan = shop.runCommand(Document("explain", query.command()).append("verbosity", "queryPlanner"))
+```
 
 ## What is in the AAR
 
@@ -51,6 +200,7 @@ The AAR is not published to a repository yet, so an application consumes the mod
 
 ```kotlin
 dependencies {
+    // The AAR alone: it re-exports :embedded-mongodb-core, so the whole query API comes with it.
     implementation(project(":embedded-mongodb"))
 }
 
@@ -96,8 +246,8 @@ session`; it works from API 26 up. Below 26 the suite has to be driven by hand w
 One database is open per process. The engine refuses a second runtime, so an application keeps
 one `EmbeddedMongo` and uses database names inside it, exactly as it would against a server.
 
-`org.mongodb:bson` and `kotlinx-coroutines-core` arrive transitively, because `Document` and `Flow`
-are in the API. The MongoDB Java driver is deliberately not a dependency — there is no server to
+`:embedded-mongodb-core`, `org.mongodb:bson` and `kotlinx-coroutines-core` all arrive
+transitively, because the collection API, `Document` and `Flow` are in the API. The MongoDB Java driver is deliberately not a dependency — there is no server to
 connect to, and its connection pooling, topology monitoring and retry machinery have nothing to do.
 
 ### Turn off backup for the database directory
@@ -156,15 +306,19 @@ reflectively and would otherwise be stripped.
 The engine runs every command on one internal strand, so the library dispatches onto a single
 thread of its own rather than a pool: a second thread would only queue behind the first.
 
-- `command`, `documents` and `EmbeddedMongo.open` are suspending and run there.
-- `commandBlocking`, `cursor` and `openBlocking` run on the calling thread and **throw** on
-  Android's main thread. A query over a few thousand documents outlasts the ANR budget, and neither
-  the engine nor JNI can interrupt one.
+- Every query, every write and `EmbeddedMongo.open` are suspending and run there. So is
+  `runCommand`. **The collection API is coroutines-only** — there are no `…Blocking` twins of it,
+  because a blocking mirror of every operation is a second API to keep honest. A caller with no
+  coroutine to run in (`Worker.doWork`, Java) wraps one call in `runBlocking` off the main thread.
+- `runCommandBlocking` and `openBlocking` run on the calling thread and **throw** on Android's main
+  thread. A query over a few thousand documents outlasts the ANR budget, and neither the engine nor
+  JNI can interrupt one.
 - `close` warns instead of throwing, because closing from a lifecycle callback is reasonable and an
   exception thrown out of `use { }` would replace whatever sent the caller there.
 
-A `DocumentCursor` that is not read to the end must be closed — `use { }` does it — or the engine
-keeps holding the cursor. Collecting `documents` handles that on its own, cancellation included.
+A cursor is a `Flow`, and a collector that stops early — `take`, `first`, a cancelled scope, an
+exception — kills the cursor on its way out. Nothing has to be closed by hand, and the engine is
+not left holding the storage snapshot a cursor reads from.
 
 Failed commands are exceptions: `EmbeddedMongoException` carries the reply's `errmsg` and `code`.
 A reply with `ok: 0`, a populated `writeErrors`, or a `writeConcernError` all raise it, so an insert
@@ -181,8 +335,9 @@ does for a reply it cannot parse.
 Writes are journalled before they are acknowledged. MongoDB's own default acknowledges a write as
 soon as it is in memory, which on a platform that ends processes without warning loses the last
 few hundred writes — and an insert that implicitly created a collection can take the collection
-with it. So a write command that names no `writeConcern` is sent with `{w: 1, j: true}`; a caller
-who wants the faster, lossy behaviour puts their own `writeConcern` in the command.
+with it. So a write command that names no `writeConcern` is sent with `{w: 1, j: true}` — the
+writes the collection API builds included. A caller who wants the faster, lossy behaviour puts
+their own `writeConcern` in a command sent through `runCommand`.
 
 ## Storage limits
 
@@ -260,10 +415,14 @@ journal file.
 ## Building this module
 
 ```sh
-./gradlew build                            # AAR, unit tests, build logic tests, lint
+./gradlew build                            # both modules, unit tests, build logic tests, lint
+./gradlew :embedded-mongodb-core:test      # the query layer: no SDK, no NDK, no engine
 ./gradlew :embedded-mongodb:testDebugUnitTest
 ./gradlew :embedded-mongodb:connectedDebugAndroidTest   # needs a 64-bit device or emulator
 ```
+
+`:embedded-mongodb-core:test` needs none of what follows: it is plain Kotlin on the JVM, and every
+query in it is exercised against a scripted `CommandRunner`.
 
 The build needs:
 

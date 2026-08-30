@@ -46,7 +46,7 @@ class StorageOptionsInstrumentedTest {
         )
 
         val wiredTiger =
-            open(options).commandBlocking("admin", Document("serverStatus", 1)).stats("wiredTiger")
+            open(options).runCommandBlocking("admin", Document("serverStatus", 1)).stats("wiredTiger")
 
         // Both are published while the connection opens, so they are settled by now.
         assertEquals(64L * 1024 * 1024, wiredTiger.stats("cache").stat("maximum bytes configured"))
@@ -63,7 +63,7 @@ class StorageOptionsInstrumentedTest {
         val options = StorageOptions(cacheSize = CacheSize.ofMebibytes(64))
 
         val wiredTiger =
-            open(options).commandBlocking("admin", Document("serverStatus", 1)).stats("wiredTiger")
+            open(options).runCommandBlocking("admin", Document("serverStatus", 1)).stats("wiredTiger")
 
         assertEquals(64L * 1024 * 1024, wiredTiger.stats("cache").stat("maximum bytes configured"))
         assertEquals(8L * 1024 * 1024, wiredTiger.stats("log").stat("maximum log file size"))
@@ -129,18 +129,18 @@ class StorageOptionsInstrumentedTest {
     fun anIndexBuildRefusedByTheFloorRunsOnceTheFloorIsLowered() {
         val unreachable = FreeDiskFloor.ofMebibytes(4 * 1024 * 1024)
         val opened = open(StorageOptions(freeDiskFloor = unreachable))
-        opened.commandBlocking(
+        opened.runCommandBlocking(
             DATABASE,
             Document("insert", COLLECTION).append("documents", listOf(Document("_id", 1))),
         )
 
         val refused = assertFailsWith<EmbeddedMongoException> {
-            opened.commandBlocking(DATABASE, createIndex())
+            opened.runCommandBlocking(DATABASE, createIndex())
         }
         assertEquals(OUT_OF_DISK_SPACE, refused.code)
 
         opened.setFreeDiskFloorBlocking(FreeDiskFloor.ofMebibytes(32))
-        assertEquals(1.0, opened.commandBlocking(DATABASE, createIndex()).getDouble("ok"))
+        assertEquals(1.0, opened.runCommandBlocking(DATABASE, createIndex()).getDouble("ok"))
     }
 
     /** Polls until the log server thread has published the count, or gives up. */
@@ -149,7 +149,7 @@ class StorageOptionsInstrumentedTest {
         var reported = 0L
         while (System.nanoTime() < deadline) {
             val database = requireNotNull(database) { "the database must be open" }
-            reported = database.commandBlocking("admin", Document("serverStatus", 1))
+            reported = database.runCommandBlocking("admin", Document("serverStatus", 1))
                 .stats("wiredTiger").stats("log").stat("number of pre-allocated log files to create")
             if (reported >= 1) return reported
             Thread.sleep(POLL_MILLIS)

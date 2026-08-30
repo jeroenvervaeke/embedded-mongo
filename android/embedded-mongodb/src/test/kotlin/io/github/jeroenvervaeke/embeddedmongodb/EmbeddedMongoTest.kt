@@ -15,9 +15,9 @@ class EmbeddedMongoTest {
     @Test
     fun `a command crosses the bridge as BSON and comes back as a document`() {
         val engine = FakeEngine { okReply("n" to 1) }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        val reply = database.commandBlocking("shop", Document("count", "orders"))
+        val reply = mongo.runCommandBlocking("shop", Document("count", "orders"))
 
         assertEquals(1, reply.getInteger("n"))
         assertEquals(listOf(Document("count", "orders")), engine.commands)
@@ -27,9 +27,9 @@ class EmbeddedMongoTest {
     @Test
     fun `a write reaches the engine journalled`() {
         val engine = FakeEngine { okReply("n" to 1) }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        database.commandBlocking("shop", Document("insert", "orders"))
+        mongo.runCommandBlocking("shop", Document("insert", "orders"))
 
         assertEquals(
             Document("w", 1).append("j", true),
@@ -40,10 +40,10 @@ class EmbeddedMongoTest {
     @Test
     fun `a command the engine rejected is raised, not returned`() {
         val engine = FakeEngine { Document("ok", 0.0).append("errmsg", "unknown").append("code", 59) }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
         val failure = assertFailsWith<EmbeddedMongoException> {
-            database.commandBlocking("shop", Document("nonesuch", 1))
+            mongo.runCommandBlocking("shop", Document("nonesuch", 1))
         }
 
         assertEquals(59, failure.code)
@@ -52,9 +52,9 @@ class EmbeddedMongoTest {
     @Test
     fun `a blocking command on the main thread fails before reaching the engine`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = true))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = true))
 
-        assertFailsWith<IllegalStateException> { database.commandBlocking("shop", Document("ping", 1)) }
+        assertFailsWith<IllegalStateException> { mongo.runCommandBlocking("shop", Document("ping", 1)) }
 
         assertTrue(engine.commands.isEmpty())
     }
@@ -63,9 +63,9 @@ class EmbeddedMongoTest {
     fun `a suspending command called from the main thread runs on the database thread`() {
         val caller = Thread.currentThread()
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, MainThreadGuard({ Thread.currentThread() == caller }))
+        val mongo = EmbeddedMongo(engine, MainThreadGuard({ Thread.currentThread() == caller }))
 
-        runBlocking { database.command("shop", Document("ping", 1)) }
+        runBlocking { mongo.runCommand("shop", Document("ping", 1)) }
 
         // The coroutine debugger appends its own suffix to the thread name.
         assertTrue(engine.threads.single().startsWith("embedded-mongodb"))
@@ -74,9 +74,9 @@ class EmbeddedMongoTest {
     @Test
     fun `every suspending command shares the one database thread`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        runBlocking { repeat(4) { database.command("shop", Document("ping", 1)) } }
+        runBlocking { repeat(4) { mongo.runCommand("shop", Document("ping", 1)) } }
 
         assertEquals(1, engine.threads.distinct().size)
     }
@@ -90,9 +90,9 @@ class EmbeddedMongoTest {
                 cursorReply(7, "firstBatch", documents(1..2))
             }
         }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        val read = runBlocking { database.documents("shop", Document("find", "orders")).toList() }
+        val read = runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).toList() }
 
         assertEquals(documents(1..4), read)
     }
@@ -110,9 +110,9 @@ class EmbeddedMongoTest {
                 else -> cursorReply(7, "firstBatch", documents(1..500))
             }
         }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        val read = runBlocking { database.documents("shop", Document("find", "orders")).take(1).toList() }
+        val read = runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).take(1).toList() }
 
         assertEquals(documents(1..1), read)
         assertTrue(killed.await(5, TimeUnit.SECONDS), "the abandoned cursor was never killed")
@@ -121,43 +121,43 @@ class EmbeddedMongoTest {
     @Test
     fun `closing releases the engine and refuses later commands`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        database.close()
+        mongo.close()
 
         assertEquals(1, engine.closes)
-        assertFailsWith<IllegalStateException> { database.commandBlocking("shop", Document("ping", 1)) }
+        assertFailsWith<IllegalStateException> { mongo.runCommandBlocking("shop", Document("ping", 1)) }
     }
 
     @Test
     fun `a suspending command after close fails rather than hanging`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
-        database.close()
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
+        mongo.close()
 
         assertFailsWith<IllegalStateException> {
-            runBlocking { database.command("shop", Document("ping", 1)) }
+            runBlocking { mongo.runCommand("shop", Document("ping", 1)) }
         }
     }
 
     @Test
     fun `collecting documents after close fails rather than hanging`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
-        database.close()
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
+        mongo.close()
 
         assertFailsWith<IllegalStateException> {
-            runBlocking { database.documents("shop", Document("find", "orders")).toList() }
+            runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).toList() }
         }
     }
 
     @Test
     fun `closing twice releases the engine once`() {
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = false))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        database.close()
-        database.close()
+        mongo.close()
+        mongo.close()
 
         assertEquals(1, engine.closes)
     }
@@ -166,9 +166,9 @@ class EmbeddedMongoTest {
     fun `closing on the main thread warns rather than throwing`() {
         val reported = mutableListOf<String>()
         val engine = FakeEngine { okReply() }
-        val database = EmbeddedMongo(engine, guard(onMainThread = true, report = reported::add))
+        val mongo = EmbeddedMongo(engine, guard(onMainThread = true, report = reported::add))
 
-        database.close()
+        mongo.close()
 
         assertEquals(1, engine.closes)
         assertEquals(1, reported.size)
