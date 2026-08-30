@@ -78,6 +78,41 @@ class AggregateQueryTest {
 
         assertNull(mongo.orders.aggregate(Document("\$count", "count")).firstOrNull())
     }
+
+    @Test
+    fun `asking for the first document tells the engine that one is all that is wanted`() =
+        runTest {
+            // Without the limit a pipeline ending in `$sort` sorts everything and has all but the
+            // first row thrown away on this side.
+            val mongo = FakeMongo { singleBatch(documents(1..1)) }
+
+            mongo.orders.aggregate(Document("\$sort", Document("total", -1))).firstOrNull()
+
+            assertEquals(
+                listOf(Document("\$sort", Document("total", -1)), Document("\$limit", 1)),
+                mongo.lastCommand.pipeline(),
+            )
+        }
+
+    @Test
+    fun `a pipeline that ends in a write is not limited, because nothing may follow those stages`() =
+        runTest {
+            val mongo = FakeMongo { singleBatch(emptyList()) }
+
+            mongo.orders.aggregate(Document("\$out", "archive")).firstOrNull()
+
+            assertEquals(listOf(Document("\$out", "archive")), mongo.lastCommand.pipeline())
+        }
+
+    @Test
+    fun `the query a caller kept is not the one that was limited`() = runTest {
+        val mongo = FakeMongo { singleBatch(documents(1..1)) }
+        val sorted = mongo.orders.aggregate(Document("\$sort", Document("total", -1)))
+
+        sorted.firstOrNull()
+
+        assertEquals(1, sorted.command().pipeline().size)
+    }
 }
 
 @Suppress("UNCHECKED_CAST")

@@ -1,5 +1,6 @@
 package io.github.jeroenvervaeke.embeddedmongodb
 
+import kotlinx.coroutines.flow.firstOrNull
 import org.bson.Document
 import org.bson.conversions.Bson
 
@@ -20,9 +21,12 @@ suspend fun MongoCollection.countDocuments(filter: Bson? = null): Long {
         filter?.let { add(Document("\$match", it.toDocument())) }
         add(Document("\$count", COUNT))
     }
+    // Collected rather than asked for through AggregateQuery.firstOrNull, which would append a
+    // `$limit` to a pipeline that already emits at most one row.
+    //
     // A `$count` over an empty selection produces no row at all, which is the honest shape of the
     // answer and is why an absent row is zero rather than a reply this library cannot read.
-    val counted = aggregate(stages).firstOrNull() ?: return 0
+    val counted = aggregate(stages).asFlow().firstOrNull() ?: return 0
     return counted.requiredLong(COUNT)
 }
 

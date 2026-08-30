@@ -95,6 +95,17 @@ class MongoDatabaseTest {
     }
 
     @Test
+    fun `a collection that already exists is a failure when options were named`() = runTest {
+        // `create` cannot apply options to a collection that is already there, so swallowing the
+        // refusal would report success and leave a capped collection uncapped.
+        val mongo = FakeMongo { mongoError(MongoErrorCode.NAMESPACE_EXISTS, "collection exists") }
+
+        assertFailsWith<EmbeddedMongoException> {
+            mongo.database.createCollection("orders", Document("capped", true).append("size", 4096))
+        }
+    }
+
+    @Test
     fun `dropping a database that is not there is a no-op`() = runTest {
         val mongo = FakeMongo { mongoError(MongoErrorCode.NAMESPACE_NOT_FOUND, "ns not found") }
 

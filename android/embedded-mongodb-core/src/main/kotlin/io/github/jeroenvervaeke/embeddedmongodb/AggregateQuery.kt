@@ -19,6 +19,10 @@ import org.bson.conversions.Bson
  * Like [FindQuery] every method returns a new query, and nothing reaches the engine until the
  * query is collected. [command] is what would be sent, which is what an application shows when it
  * wants to prove that the pipeline on the screen is the pipeline that ran.
+ *
+ * "New query" is about the query, not about the documents in it: a filter, sort or projection is
+ * held as the caller passed it rather than copied, so changing that [Document] afterwards changes
+ * what this query sends. `Bsons.kt` says why it is not copied — build one and hand it over.
  */
 class AggregateQuery internal constructor(
     private val collection: MongoCollection,
@@ -69,8 +73,24 @@ class AggregateQuery internal constructor(
     /**
      * The first document the pipeline produces, or `null` when it produced none — which is the
      * honest answer from a `$count` over an empty collection, since that emits no row at all.
+     *
+     * A `$limit` is added so the engine is told that one document is all that is wanted. Without
+     * it a pipeline ending in `$sort` or `$group` does the whole of its work and then has all but
+     * the first row thrown away on this side, which is a cost the identical-looking
+     * [FindQuery.firstOrNull] never pays.
      */
-    suspend fun firstOrNull(): Document? = asFlow().firstOrNull()
+    suspend fun firstOrNull(): Document? = limitedToOne().asFlow().firstOrNull()
+
+    /**
+     * This pipeline, cut to one document unless it ends in a stage that writes.
+     *
+     * `$out` and `$merge` have to be the last stage of a pipeline, so appending to one is an
+     * error rather than an optimisation. They also produce no documents, so there is nothing to
+     * limit: the answer either way is the `null` this call already gives.
+     */
+    private fun limitedToOne(): AggregateQuery =
+        if (pipeline.lastOrNull()?.keys?.firstOrNull() in WRITING_STAGES) this
+        else then(Document("\$limit", 1))
 
     private fun with(
         pipeline: List<Document> = this.pipeline,
@@ -78,3 +98,6 @@ class AggregateQuery internal constructor(
         allowDiskUse: Boolean? = this.allowDiskUse,
     ) = AggregateQuery(collection, pipeline, batchSize, allowDiskUse)
 }
+
+/** The stages that write, which must be last in a pipeline and emit nothing of their own. */
+private val WRITING_STAGES = setOf("\$out", "\$merge")

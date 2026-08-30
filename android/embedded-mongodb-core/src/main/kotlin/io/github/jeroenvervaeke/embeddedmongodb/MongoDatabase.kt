@@ -41,13 +41,23 @@ class MongoDatabase(internal val commands: CommandRunner, val name: String) {
      * Creates [name] explicitly, with [options] such as a `capped` size or a `validator`.
      *
      * Writing to a collection creates it, so this is for the cases where the shape matters before
-     * the first document does. Creating one that already exists is not a failure: the collection
-     * asked for is the collection there is.
+     * the first document does.
+     *
+     * Creating a collection that already exists is not a failure **when no options were named**:
+     * the collection asked for is the collection there is. Naming options changes that, because
+     * `create` cannot apply them to a collection that already exists — swallowing the refusal
+     * would report success while leaving a `capped` collection uncapped, and there is nothing
+     * about the call that would say so. `collMod` through [runCommand] is how an existing
+     * collection is changed.
      */
     suspend fun createCollection(name: String, options: Bson? = null) {
         val create = Document("create", name)
-        options?.let { create.putAll(it.toDocument()) }
-        ignoring(MongoErrorCode.NAMESPACE_EXISTS) { runCommand(create) }
+        if (options == null) {
+            ignoring(MongoErrorCode.NAMESPACE_EXISTS) { runCommand(create) }
+            return
+        }
+        create.putAll(options.toDocument())
+        runCommand(create)
     }
 
     /** Deletes this database and everything in it. Dropping one that is not there is a no-op. */

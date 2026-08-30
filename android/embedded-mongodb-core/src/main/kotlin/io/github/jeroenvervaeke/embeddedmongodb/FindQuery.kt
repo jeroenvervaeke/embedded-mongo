@@ -20,6 +20,10 @@ import org.bson.conversions.Bson
  *
  * Nothing reaches the engine until [asFlow], [toList] or [firstOrNull] is called. [command] is
  * what would be sent, which is worth having when the query is being shown, logged or explained.
+ *
+ * "New query" is about the query, not about the documents in it: a filter, sort or projection is
+ * held as the caller passed it rather than copied, so changing that [Document] afterwards changes
+ * what this query sends. `Bsons.kt` says why it is not copied — build one and hand it over.
  */
 class FindQuery internal constructor(
     private val collection: MongoCollection,
