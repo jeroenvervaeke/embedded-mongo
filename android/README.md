@@ -8,7 +8,7 @@ packages both into an AAR.
 // Inside a coroutine: opening and every query suspend, and all of them run on the library's own
 // database thread rather than on the caller's.
 val mongo = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
-val orders = mongo.database("shop").collection("orders")
+val orders = mongo.getDatabase("shop").getCollection("orders")
 
 orders.insertOne(Document("customer", "ada").append("total", 12).append("paid", false))
 orders.createIndex(Indexes.ascending("customer"))
@@ -50,10 +50,16 @@ API with five lines of its own.
 
 **On a collection.** `find`, `aggregate`, `distinct`, `countDocuments`,
 `estimatedDocumentCount`, `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,
-`findOneAndUpdate`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `createIndex`, `createIndexes`,
-`listIndexes`, `dropIndex`, `drop`.
+`findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`,
+`createIndex`, `createIndexes`, `listIndexes`, `dropIndex`, `drop`.
 
-**On a database.** `collection`, `listCollectionNames`, `createCollection`, `drop`.
+**On a database.** `getCollection`, `listCollectionNames`, `createCollection`, `drop`.
+
+The names are the driver's names and so is the behaviour, including where MongoDB reports "there
+was nothing to do": `drop` on a collection or database that is not there is a no-op, while
+`createCollection` on one that exists and `dropIndex` on an index that does not are failures
+carrying [MongoErrorCode] values to catch. That is what the Java and Kotlin drivers do, and an
+application using create-or-fail as a race guard needs it.
 
 All but `find`, `aggregate` and the two `runCommand`s are extension functions rather than members,
 and the rule is worth knowing because it is the one an application's own operations follow: a
@@ -70,17 +76,22 @@ collected, every method on it returns a new query rather than changing the one i
 and `command()` reports what would be sent — which is what an application shows when it wants to
 prove that the pipeline on the screen is the pipeline that ran.
 
+A query **is** a `Flow<Document>`, as the driver's `FindFlow` and `AggregateFlow` are, so it can
+be collected directly and every `Flow` operator applies:
+
 ```kotlin
 val paid = orders.find(Document("paid", true))
 val newest = paid.sort(Document("placed", -1)).limit(10).toList()
-val everyOne = paid.asFlow()                  // paged as the collector consumes it
+paid.collect(::render)                        // it is the flow; no asFlow() needed
 val mine = paid.asFlow(Document::toOrder)     // parsed as it arrives
 ```
 
 There is no `Collection<T>`. `asFlow(read)` is the whole of the typed story: parsing is a function
-from a `Document`, and where a document becomes a domain object is a boundary an application owns.
-A generic parameter would mean a codec registry, which would mean the driver dependency this
-library does not have.
+from a `Document`, and where a document becomes a domain object is a boundary an application owns
+anyway. The machinery for a generic parameter is available — `PojoCodecProvider` and
+`CodecRegistries` are in `org.mongodb:bson`, which is already a dependency — so this is a choice
+rather than a limitation: a codec registry is a second way to describe a document, and the one
+place it would earn its keep, Kotlin data classes, is the place the POJO codec handles worst.
 
 `insertOne` and `insertMany` generate an `ObjectId` for a document that names no `_id`, and report
 what each document was stored under. Writes are journalled — see [Durability](#durability).
@@ -121,6 +132,28 @@ places.createIndexes(
 )
 ```
 
+### Errors
+
+One exception, `EmbeddedMongoException`, carrying MongoDB's own error code — so the check a
+MongoDB developer already knows is the check to write:
+
+```kotlin
+try {
+    orders.insertOne(order)
+} catch (failure: EmbeddedMongoException) {
+    if (failure.code != MongoErrorCode.DUPLICATE_KEY) throw failure
+}
+```
+
+`response` is the whole reply the engine sent, and `writeErrors` reads the per-document failures
+out of it. That is what makes `insertMany(ordered = false)` worth asking for: the engine carries
+on past a document it rejects, so the exception holds every rejection rather than only the one
+that stopped the batch, and `response["n"]` says how many went in regardless.
+
+A negative `code` is the bridge rather than MongoDB — `bridgeError` names it — and
+`NO_ERROR_CODE` means this library raised the failure itself, which it does for a reply it cannot
+parse.
+
 ### When none of it fits
 
 `MongoDatabase.runCommand`, `MongoCollection.runCommand` and their `runCursorCommand` siblings send
@@ -129,6 +162,13 @@ MongoDB grew after this library did. `EmbeddedMongo.runCommand` and `runCommandB
 same thing one level down, naming the database at the call site. They are the last resort rather
 than the API, but everything above them ends up there too, so a command written by hand is not a
 lesser citizen — only an unchecked one.
+
+`explain` is the one worth spelling out, because `command()` makes it a one-liner:
+
+```kotlin
+val query = orders.find(Document("paid", true)).sort(Document("placed", -1))
+val plan = shop.runCommand(Document("explain", query.command()).append("verbosity", "queryPlanner"))
+```
 
 ## What is in the AAR
 
