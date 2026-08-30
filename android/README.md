@@ -80,10 +80,16 @@ Every one of them is an `org.bson.conversions.Bson`. `Document` implements it, s
 orders.updateMany(Document("paid", false), Document("\$set", Document("paid", true)))
 ```
 
-It is also what the official driver's `Filters`, `Sorts`, `Projections` and `Updates` builders
-return, so an application that would rather write those adds `org.mongodb:mongodb-driver-core` to
-its own dependencies and uses them at the same call sites — this library does not depend on the
+It is also what the official driver's `Filters`, `Sorts`, `Projections`, `Updates`, `Aggregates`
+and `Accumulators` builders return, so an application can add `org.mongodb:mongodb-driver-core` to
+its own dependencies and use them at the same call sites — this library does not depend on the
 driver to make that work.
+
+**Adding it is the recommendation rather than an aside**, and pipelines are why. Kotlin gives `$`
+to string templates, so every MongoDB operator written as a literal has to be escaped:
+`Document("\$match", Document("total", Document("\$lte", 20)))`. One is tolerable; an
+aggregation pipeline is a dozen. `Aggregates.match(Filters.lte("total", 20))` says the same thing
+and cannot be got wrong by a missing backslash.
 
 The one builder here is `Indexes`, because an index key specification is the part that is easy to
 get quietly wrong: `Document("loc", "2dsphere")` and `Document("loc", 1)` differ by a value rather
@@ -244,7 +250,9 @@ The engine runs every command on one internal strand, so the library dispatches 
 thread of its own rather than a pool: a second thread would only queue behind the first.
 
 - Every query, every write and `EmbeddedMongo.open` are suspending and run there. So is
-  `runCommand`.
+  `runCommand`. **The collection API is coroutines-only** — there are no `…Blocking` twins of it,
+  because a blocking mirror of every operation is a second API to keep honest. A caller with no
+  coroutine to run in (`Worker.doWork`, Java) wraps one call in `runBlocking` off the main thread.
 - `runCommandBlocking` and `openBlocking` run on the calling thread and **throw** on Android's main
   thread. A query over a few thousand documents outlasts the ANR budget, and neither the engine nor
   JNI can interrupt one.
