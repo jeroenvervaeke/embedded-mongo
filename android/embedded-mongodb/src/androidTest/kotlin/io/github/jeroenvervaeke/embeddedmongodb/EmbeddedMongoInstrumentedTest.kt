@@ -132,23 +132,27 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun droppingAnIndexSaysWhichOfTheTwoThingsWasMissing() = runBlocking {
-        // Both are reported rather than swallowed, as the driver reports them -- but they are
-        // different reports, and only the engine can say which: a fake answers with whichever
-        // code it was told to. The collection has to exist before the engine looks for an index
-        // at all, so an index dropped from a collection nothing ever wrote to is a missing
-        // *namespace* rather than a missing index.
+    fun droppingAnIndexReportsWhatTheEngineReports() = runBlocking {
+        // Measured here rather than taken from the driver's documentation, which disagrees: the
+        // driver raises IndexNotFound for a name that is not there, and this engine does not
+        // treat that as a failure at all. Only a device can settle that -- the JVM test beside
+        // this one answers with whichever code its fake was handed.
+        val neverWritten = mongo.getDatabase(DATABASE).getCollection("never-written")
+
+        // A collection that does not exist: the namespace is missing, and the engine says so
+        // before it looks for an index inside it.
         val missingCollection = assertFailsWith<EmbeddedMongoException> {
-            mongo.getDatabase(DATABASE).getCollection("never-written").dropIndex("no_such_index")
+            neverWritten.dropIndex("no_such_index")
         }
         assertEquals(MongoErrorCode.NAMESPACE_NOT_FOUND, missingCollection.code)
 
         orders.insertOne(Document("value", "first"))
 
-        val missingIndex = assertFailsWith<EmbeddedMongoException> {
-            orders.dropIndex("no_such_index")
-        }
-        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, missingIndex.code)
+        // An index that does not exist on a collection that does: not an error here.
+        orders.dropIndex("no_such_index")
+
+        // `_id_` cannot be dropped at all, and that is a failure of its own rather than a no-op.
+        assertFailsWith<EmbeddedMongoException> { orders.dropIndex("_id_") }
     }
 
     @Test

@@ -75,11 +75,18 @@ suspend fun MongoCollection.listIndexes(): List<Document> =
 /**
  * Removes the index called [name].
  *
- * An index that is not there is a failure, as it is in the driver: MongoDB reports
- * [MongoErrorCode.INDEX_NOT_FOUND], and an application that wants "make sure it is gone" catches
- * that code. `_id_` cannot be removed at all, and asking to is a failure of its own.
+ * Whatever the engine reports is reported on rather than swallowed, and what it reports is worth
+ * knowing, because it is not quite what the drivers describe — this is measured against the
+ * engine in `EmbeddedMongoInstrumentedTest`, not taken from documentation:
  *
- * @throws EmbeddedMongoException if there is no such index, or the engine refused to drop it.
+ * - An index that is not there on a collection that **is** there is not an error. The command
+ *   succeeds and this returns normally, so "make sure it is gone" needs no `catch`.
+ * - A collection that is not there is [MongoErrorCode.NAMESPACE_NOT_FOUND]: the engine answers
+ *   for the namespace before it looks for an index inside it.
+ * - `_id_` cannot be dropped at all, and asking to is a failure of its own.
+ *
+ * @throws EmbeddedMongoException if the collection does not exist, or the engine refused to drop
+ *   the index.
  */
 suspend fun MongoCollection.dropIndex(name: String) {
     runCommand(Document("dropIndexes", this.name).append("index", name))

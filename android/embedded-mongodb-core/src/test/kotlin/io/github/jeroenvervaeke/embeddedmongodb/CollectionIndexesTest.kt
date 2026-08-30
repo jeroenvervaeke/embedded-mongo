@@ -115,12 +115,15 @@ class CollectionIndexesTest {
     }
 
     @Test
-    fun `an index that is not there is reported, as the driver reports it`() = runTest {
-        val mongo = FakeMongo { mongoError(MongoErrorCode.INDEX_NOT_FOUND, "index not found") }
+    fun `a refusal to drop an index is passed on rather than swallowed`() = runTest {
+        // Which code the engine actually answers with is not this test's to say -- the fake
+        // returns whatever it is handed. `EmbeddedMongoInstrumentedTest` measures that against
+        // the engine; what is pinned here is that nothing is quietly absorbed on the way out.
+        val mongo = FakeMongo { mongoError(MongoErrorCode.NAMESPACE_NOT_FOUND, "ns not found") }
 
         val failure = assertFailsWith<EmbeddedMongoException> { mongo.orders.dropIndex("by_customer") }
 
-        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, failure.code)
+        assertEquals(MongoErrorCode.NAMESPACE_NOT_FOUND, failure.code)
         assertEquals(
             Document("dropIndexes", "orders").append("index", "by_customer"),
             mongo.lastCommand,
