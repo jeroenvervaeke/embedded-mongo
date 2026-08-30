@@ -283,8 +283,12 @@ jobs:
           avdmanager list avd | grep -qE '^ *Name: ci$' \
             || { echo 'the AVD was not created' >&2; avdmanager list avd >&2; exit 1; }
 
+          # A stock runner cannot spare the 7.2 GB of userdata an API 35 AVD asks for by
+          # default -- the emulator refuses to start with "Not enough space to create userdata
+          # partition", tens of megabytes short, before a single test runs. This suite writes one
+          # database of about 10 MiB, so the demand is what is wrong rather than the supply.
           emulator -avd ci -no-window -no-audio -no-boot-anim -no-snapshot \
-            -gpu swiftshader_indirect > emulator.log 2>&1 &
+            -partition-size 2048 -gpu swiftshader_indirect > emulator.log 2>&1 &
           emulator_pid=$!
           # Bounded, with the emulator's own log on failure: an emulator that never starts
           # otherwise leaves adb blocking until the step's timeout, saying nothing.
