@@ -9,6 +9,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.count
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.bson.Document
 import org.junit.After
@@ -20,80 +22,129 @@ import org.junit.runner.RunWith
  * The half of the library that only a device can answer for: that the two shared libraries load,
  * that the engine runs, and that the main thread guard sees Android's real Looper.
  *
- * The document count is deliberately larger than a single MongoDB batch, so the `getMore` paging
- * is exercised against the engine rather than against a fake.
+ * The collection API is exercised here rather than only against a fake, because what a fake
+ * cannot check is that MongoDB accepts the commands it builds. The document count is deliberately
+ * larger than a single MongoDB batch, so the `getMore` paging runs against the engine.
  */
 @RunWith(AndroidJUnit4::class)
 class EmbeddedMongoInstrumentedTest {
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var root: File
     private lateinit var directory: File
-    private lateinit var database: EmbeddedMongo
+    private lateinit var mongo: EmbeddedMongo
+
+    private val orders: MongoCollection get() = mongo.database(DATABASE).collection(COLLECTION)
 
     @Before
     fun openDatabase() {
         root = File(context.filesDir, "embedded-mongodb-${System.nanoTime()}")
         directory = File(root, "main")
-        database = EmbeddedMongo.openBlocking(directory)
+        mongo = EmbeddedMongo.openBlocking(directory)
     }
 
     @After
     fun closeDatabase() {
-        database.close()
+        mongo.close()
         root.deleteRecursively()
     }
 
     @Test
     fun theEngineAnswersCommands() {
-        val reply = database.commandBlocking(DATABASE, Document("ping", 1))
+        val reply = mongo.runCommandBlocking(DATABASE, Document("ping", 1))
 
         assertEquals(1.0, reply.getDouble("ok"))
     }
 
     @Test
-    fun everyDocumentArrivesHoweverManyBatchesItTakes() {
+    fun everyDocumentArrivesHoweverManyBatchesItTakes() = runBlocking {
         insertOrders(ORDERS)
 
-        val read = database.cursor(DATABASE, Document("find", COLLECTION)).use { it.count() }
+        val read = orders.find().asFlow().count()
 
         assertEquals(ORDERS, read)
     }
 
     @Test
-    fun theFlowEmitsEveryDocument() {
+    fun abandoningACursorLeavesTheDatabaseUsable() = runBlocking {
         insertOrders(ORDERS)
 
-        val read = runBlocking { database.documents(DATABASE, Document("find", COLLECTION)).count() }
-
-        assertEquals(ORDERS, read)
-    }
-
-    @Test
-    fun abandoningACursorLeavesTheDatabaseUsable() {
-        insertOrders(ORDERS)
-
-        val read = database.cursor(DATABASE, Document("find", COLLECTION)).use { it.take(5).toList() }
+        val read = orders.find().asFlow().take(5).toList()
 
         assertEquals(5, read.size)
-        assertEquals(ORDERS, database.cursor(DATABASE, Document("find", COLLECTION)).use { it.count() })
+        assertEquals(ORDERS, orders.find().asFlow().count())
+    }
+
+    @Test
+    fun theEngineAcceptsTheCommandsTheCollectionApiBuilds() = runBlocking {
+        val inserted = orders.insertMany(
+            listOf(Document("value", "first"), Document("value", "second")),
+        )
+
+        assertEquals(2, inserted.insertedIds.size)
+        assertEquals(2L, orders.countDocuments())
+        assertEquals(1L, orders.countDocuments(Document("value", "first")))
+        assertEquals(
+            "first",
+            orders.find(Document("_id", inserted.insertedIds.first())).firstOrNull()?.getString("value"),
+        )
+    }
+
+    @Test
+    fun anUpdateAndADeleteReportWhatTheyReached() = runBlocking {
+        orders.insertMany(listOf(Document("paid", false), Document("paid", false)))
+
+        val updated = orders.updateMany(Document("paid", false), Document("\$set", Document("paid", true)))
+        val deleted = orders.deleteOne(Document("paid", true))
+
+        assertEquals(UpdateResult(matchedCount = 2, modifiedCount = 2), updated)
+        assertEquals(DeleteResult(1), deleted)
+        assertEquals(1L, orders.countDocuments())
+    }
+
+    @Test
+    fun anIndexIsBuiltAndReportedByTheNameItWasBuiltUnder() = runBlocking {
+        orders.insertOne(Document("customer", "ada"))
+
+        val name = orders.createIndex(Indexes.ascending("customer"))
+
+        assertEquals("customer_1", name)
+        assertTrue(orders.listIndexes().any { it.getString("name") == name }, "${orders.listIndexes()}")
+    }
+
+    @Test
+    fun anAggregationRunsInTheEngineAndPagesItsCursor() = runBlocking {
+        insertOrders(ORDERS)
+
+        val grouped = orders.aggregate(
+            Document("\$group", Document("_id", null).append("total", Document("\$sum", 1))),
+        ).toList()
+
+        assertEquals(ORDERS, grouped.single().getInteger("total"))
+    }
+
+    @Test
+    fun droppingSomethingThatIsNotThereIsTheStateTheCallerAskedFor() = runBlocking {
+        // A collection nothing has written to does not exist, and MongoDB reports dropping one as
+        // a failure. The library reads that code and answers the question that was asked.
+        mongo.database(DATABASE).collection("never-written").drop()
+        orders.dropIndex("customer_1")
     }
 
     @Test
     fun aRejectedCommandCarriesTheServerErrorCode() {
         val failure = assertFailsWith<EmbeddedMongoException> {
-            database.commandBlocking(DATABASE, Document("thereIsNoSuchCommand", 1))
+            mongo.runCommandBlocking(DATABASE, Document("thereIsNoSuchCommand", 1))
         }
 
         assertEquals(COMMAND_NOT_FOUND, failure.code)
     }
 
     @Test
-    fun aDuplicateKeyIsRaisedEvenThoughTheCommandItselfSucceeds() {
+    fun aDuplicateKeyIsRaisedEvenThoughTheCommandItselfSucceeds() = runBlocking {
         val order = Document("_id", 1)
-        val insert = Document("insert", COLLECTION).append("documents", listOf(order))
-        database.commandBlocking(DATABASE, insert)
+        orders.insertOne(order)
 
-        val failure = assertFailsWith<EmbeddedMongoException> { database.commandBlocking(DATABASE, insert) }
+        val failure = assertFailsWith<EmbeddedMongoException> { orders.insertOne(order) }
 
         assertEquals(DUPLICATE_KEY, failure.code)
     }
@@ -104,7 +155,7 @@ class EmbeddedMongoInstrumentedTest {
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             failure = assertFailsWith<IllegalStateException> {
-                database.commandBlocking(DATABASE, Document("ping", 1))
+                mongo.runCommandBlocking(DATABASE, Document("ping", 1))
             }
         }
 
@@ -116,7 +167,7 @@ class EmbeddedMongoInstrumentedTest {
         var reply: Document? = null
 
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            reply = runBlocking { database.command(DATABASE, Document("ping", 1)) }
+            reply = runBlocking { mongo.runCommand(DATABASE, Document("ping", 1)) }
         }
 
         assertEquals(1.0, reply?.getDouble("ok"))
@@ -124,11 +175,11 @@ class EmbeddedMongoInstrumentedTest {
 
     @Test
     fun theSuspendingOpenReturnsAUsableDatabase() {
-        database.close()
+        mongo.close()
 
-        database = runBlocking { EmbeddedMongo.open(directory) }
+        mongo = runBlocking { EmbeddedMongo.open(directory) }
 
-        assertEquals(1.0, database.commandBlocking(DATABASE, Document("ping", 1)).getDouble("ok"))
+        assertEquals(1.0, mongo.runCommandBlocking(DATABASE, Document("ping", 1)).getDouble("ok"))
     }
 
     @Test
@@ -143,13 +194,13 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun documentsSurviveClosingAndReopening() {
+    fun documentsSurviveClosingAndReopening() = runBlocking {
         insertOrders(ORDERS)
-        database.close()
+        mongo.close()
 
-        database = EmbeddedMongo.openBlocking(directory)
+        mongo = EmbeddedMongo.openBlocking(directory)
 
-        assertEquals(ORDERS, database.cursor(DATABASE, Document("find", COLLECTION)).use { it.count() })
+        assertEquals(ORDERS.toLong(), orders.countDocuments())
     }
 
     @Test
@@ -165,7 +216,7 @@ class EmbeddedMongoInstrumentedTest {
     fun aClosedEngineRefusesFurtherCommands() {
         // The engine allows one runtime per process, so the database this test opens has to be
         // the only one.
-        database.close()
+        mongo.close()
         val engine = NativeEngine.open(File(root, "closed").apply { mkdirs() })
         engine.close()
 
@@ -176,7 +227,7 @@ class EmbeddedMongoInstrumentedTest {
 
     @Test
     fun closingTheEngineTwiceDoesNotReachTheBridgeTwice() {
-        database.close()
+        mongo.close()
         val engine = NativeEngine.open(File(root, "twice").apply { mkdirs() })
 
         engine.close()
@@ -198,24 +249,24 @@ class EmbeddedMongoInstrumentedTest {
 
     @Test
     fun openingWithAContextChecksTheVolumeAndThenOpens() {
-        database.close()
+        mongo.close()
 
-        database = EmbeddedMongo.openBlocking(context, File(root, "checked"))
+        mongo = EmbeddedMongo.openBlocking(context, File(root, "checked"))
 
-        assertEquals(1.0, database.commandBlocking(DATABASE, Document("ping", 1)).getDouble("ok"))
+        assertEquals(1.0, mongo.runCommandBlocking(DATABASE, Document("ping", 1)).getDouble("ok"))
     }
 
     @Test
     fun openingSomethingThatIsNotADirectoryIsRefused() {
-        database.close()
+        mongo.close()
         val file = File(root, "a-file").apply { writeText("not a database") }
 
         assertFailsWith<IllegalArgumentException> { EmbeddedMongo.openBlocking(file) }
     }
 
     private fun insertOrders(count: Int) {
-        val orders = (1..count).map { Document("_id", it).append("value", "order $it") }
-        database.commandBlocking(DATABASE, Document("insert", COLLECTION).append("documents", orders))
+        val documents = (1..count).map { Document("_id", it).append("value", "order $it") }
+        mongo.runCommandBlocking(DATABASE, Document("insert", COLLECTION).append("documents", documents))
     }
 }
 

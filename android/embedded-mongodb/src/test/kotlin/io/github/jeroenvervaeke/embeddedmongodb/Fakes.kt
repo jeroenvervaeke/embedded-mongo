@@ -51,18 +51,6 @@ internal class FakeOpener(private val handle: Long = 1) : BridgeOpener {
     }
 }
 
-/** A [CommandRunner] that answers with prepared replies and records what it was asked. */
-internal class FakeRunner(replies: List<Document>) : CommandRunner {
-    private val replies = replies.toMutableList()
-    val commands = mutableListOf<Document>()
-
-    override fun run(database: String, command: Document): Document {
-        commands += command
-        check(replies.isNotEmpty()) { "the cursor issued an unexpected command: $command" }
-        return replies.removeAt(0)
-    }
-}
-
 /**
  * An [Engine] starting on [mebibytes] for both free-disk floors, which accepts every command and
  * answers `getParameter` with whatever `setParameter` last wrote — except that a `setParameter`

@@ -91,8 +91,13 @@ kotlin {
 }
 
 dependencies {
-    // Both leak into the public API -- Document in every signature, Flow in one -- so consumers
-    // resolve them transitively rather than having to name them again.
+    // The query API -- databases, collections, cursors and the commands they build -- is plain
+    // Kotlin and lives next door, so it can be compiled and tested without the SDK or the engine.
+    // `api` because it is this module's public API too: an application depends on the AAR alone.
+    api(project(":embedded-mongodb-core"))
+
+    // Both leak into the public API -- Document in every signature, Flow in the cursor-returning
+    // ones -- so consumers resolve them transitively rather than having to name them again.
     api(libs.bson)
     api(libs.coroutines.core)
 

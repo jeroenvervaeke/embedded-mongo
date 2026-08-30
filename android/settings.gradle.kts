@@ -30,4 +30,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "embedded-mongodb-android"
 
+include(":embedded-mongodb-core")
 include(":embedded-mongodb")

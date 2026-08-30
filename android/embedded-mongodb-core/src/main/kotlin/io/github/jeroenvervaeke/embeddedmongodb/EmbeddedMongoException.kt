@@ -5,7 +5,24 @@ package io.github.jeroenvervaeke.embeddedmongodb
  * Neither MongoDB nor the bridge ever uses it: MongoDB codes are positive and the bridge's own are
  * the negative ones in [BridgeError].
  */
-internal const val NO_ERROR_CODE = 0
+const val NO_ERROR_CODE: Int = 0
+
+/**
+ * The MongoDB error codes this library reacts to rather than merely passes on.
+ *
+ * A handful rather than all several hundred: these are the ones where "the command failed" is the
+ * wrong thing to tell a caller, because the outcome they asked for is the one they already have.
+ */
+object MongoErrorCode {
+    /** The collection or database is not there. Dropping one that is already gone reports this. */
+    const val NAMESPACE_NOT_FOUND: Int = 26
+
+    /** The index is not there. Dropping one that is already gone reports this. */
+    const val INDEX_NOT_FOUND: Int = 27
+
+    /** The collection is already there, which is what `create` answers when it has nothing to do. */
+    const val NAMESPACE_EXISTS: Int = 48
+}
 
 /**
  * A failure reported by the engine: a command that answered `ok: 0`, a write that failed, an error

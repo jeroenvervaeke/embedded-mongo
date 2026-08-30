@@ -102,9 +102,9 @@ data class ReportedFloors(val indexBuildMebibytes: Long, val querySpillingBytes:
 suspend fun EmbeddedMongo.setFreeDiskFloor(floor: FreeDiskFloor) {
     val before = freeDiskFloors()
     try {
-        for (knob in freeDiskFloorCommands(floor)) command(ADMIN, knob)
+        for (knob in freeDiskFloorCommands(floor)) runCommand(ADMIN, knob)
     } catch (failure: Throwable) {
-        restore(before, failure) { knob -> command(ADMIN, knob) }
+        restore(before, failure) { knob -> runCommand(ADMIN, knob) }
         throw failure
     }
 }
@@ -117,16 +117,16 @@ suspend fun EmbeddedMongo.setFreeDiskFloor(floor: FreeDiskFloor) {
 fun EmbeddedMongo.setFreeDiskFloorBlocking(floor: FreeDiskFloor) {
     val before = freeDiskFloorsBlocking()
     try {
-        for (knob in freeDiskFloorCommands(floor)) commandBlocking(ADMIN, knob)
+        for (knob in freeDiskFloorCommands(floor)) runCommandBlocking(ADMIN, knob)
     } catch (failure: Throwable) {
-        restore(before, failure) { knob -> commandBlocking(ADMIN, knob) }
+        restore(before, failure) { knob -> runCommandBlocking(ADMIN, knob) }
         throw failure
     }
 }
 
 /** What the engine says the two floors are now. */
 suspend fun EmbeddedMongo.freeDiskFloors(): ReportedFloors =
-    reportedFloors(command(ADMIN, reportedFloorsCommand()))
+    reportedFloors(runCommand(ADMIN, reportedFloorsCommand()))
 
 /**
  * [freeDiskFloors] on the calling thread.
@@ -134,7 +134,7 @@ suspend fun EmbeddedMongo.freeDiskFloors(): ReportedFloors =
  * @throws IllegalStateException if called on the main thread, or after [EmbeddedMongo.close].
  */
 fun EmbeddedMongo.freeDiskFloorsBlocking(): ReportedFloors =
-    reportedFloors(commandBlocking(ADMIN, reportedFloorsCommand()))
+    reportedFloors(runCommandBlocking(ADMIN, reportedFloorsCommand()))
 
 /**
  * Puts [floors] in force, each knob in the unit it takes.
@@ -145,7 +145,7 @@ fun EmbeddedMongo.freeDiskFloorsBlocking(): ReportedFloors =
  * library's type.
  */
 internal fun EmbeddedMongo.restoreFreeDiskFloorsBlocking(floors: ReportedFloors) {
-    for (knob in floors.commands()) commandBlocking(ADMIN, knob)
+    for (knob in floors.commands()) runCommandBlocking(ADMIN, knob)
 }
 
 /**
@@ -182,7 +182,7 @@ private fun ReportedFloors.commands(): List<Document> = listOf(
  * `was`, so a combined command answers with two fields of the same name and a parameter that
  * was quietly rejected is indistinguishable from one that was applied.
  *
- * Both go over [EmbeddedMongo.command], which is all a server parameter needs. That is the
+ * Both go over [EmbeddedMongo.runCommand], which is all a server parameter needs. That is the
  * whole reason none of this reaches the native bridge: what `setParameter` can do on a running
  * engine does not need a native entry point, an engine rebuild or a release to change.
  */
