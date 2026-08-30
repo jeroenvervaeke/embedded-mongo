@@ -1,5 +1,7 @@
 package io.github.jeroenvervaeke.embeddedmongodb
 
+import org.bson.Document
+
 /**
  * The code carried by a failure this library raised itself, rather than one the engine reported.
  * Neither MongoDB nor the bridge ever uses it: MongoDB codes are positive and the bridge's own are
@@ -8,20 +10,36 @@ package io.github.jeroenvervaeke.embeddedmongodb
 const val NO_ERROR_CODE: Int = 0
 
 /**
- * The MongoDB error codes this library reacts to rather than merely passes on.
+ * The few MongoDB error codes worth naming, out of the several hundred MongoDB has.
  *
- * A handful rather than all several hundred: these are the ones where "the command failed" is the
- * wrong thing to tell a caller, because the outcome they asked for is the one they already have.
+ * These are the ones an application reacts to rather than reports: a duplicate key it expected, a
+ * collection that was already there, an index that was already gone. The rest arrive as
+ * [EmbeddedMongoException.code] and mean what MongoDB's error code documentation says they mean.
+ *
+ * ```
+ * try {
+ *     orders.insertOne(order)
+ * } catch (failure: EmbeddedMongoException) {
+ *     if (failure.code != MongoErrorCode.DUPLICATE_KEY) throw failure
+ *     // …that customer already has one.
+ * }
+ * ```
  */
 object MongoErrorCode {
     /** The collection or database is not there. Dropping one that is already gone reports this. */
     const val NAMESPACE_NOT_FOUND: Int = 26
 
-    /** The index is not there. Dropping one that is already gone reports this. */
+    /** The index is not there, which is what `dropIndexes` answers for one already dropped. */
     const val INDEX_NOT_FOUND: Int = 27
 
     /** The collection is already there, which is what `create` answers when it has nothing to do. */
     const val NAMESPACE_EXISTS: Int = 48
+
+    /**
+     * A unique index rejected a write, `_id` included. The one every application ends up
+     * catching, and the reason this object exists rather than leaving callers a magic number.
+     */
+    const val DUPLICATE_KEY: Int = 11000
 }
 
 /**
@@ -29,13 +47,37 @@ object MongoErrorCode {
  * raised inside the native bridge, or a reply this library could not make sense of.
  *
  * [code] tells the three apart — a positive MongoDB error code, one of the negative [BridgeError]
- * values, or [NO_ERROR_CODE] when the failure was raised on this side of the bridge. The native
- * bridge constructs this class by name through JNI with the `(String, int)` constructor, so
- * `consumer-rules.pro` keeps R8 from renaming either.
+ * values, or [NO_ERROR_CODE] when the failure was raised on this side of the bridge. Compare it
+ * with [MongoErrorCode] for the handful worth catching.
+ *
+ * [response] is the whole reply the engine sent, when the failure came from one. A failed command
+ * carries more than a message — `writeErrors` says which documents of a batch were rejected and
+ * why, `n` says how many were stored anyway, and `writeConcernError` is a third thing again — and
+ * an exception that kept only the first message would be throwing that away. It is `null` for a
+ * failure raised before or below a reply: a bridge error, or a reply this library could not read.
+ *
+ * The native bridge constructs this class by name through JNI with the `(String, int)`
+ * constructor, so `consumer-rules.pro` keeps R8 from renaming either, and `@JvmOverloads` keeps
+ * that two-argument signature in existence now that there is a third parameter.
  */
-class EmbeddedMongoException(message: String, val code: Int) : Exception(message) {
+class EmbeddedMongoException @JvmOverloads constructor(
+    message: String,
+    val code: Int,
+    val response: Document? = null,
+) : Exception(message) {
     /** The bridge failure [code] names, or `null` when the code came from MongoDB or from here. */
     val bridgeError: BridgeError? get() = BridgeError.of(code)
+
+    /**
+     * The per-document failures of a write, in the order the engine reported them, or empty when
+     * the failure was not one.
+     *
+     * The reason an unordered [insertMany] is worth asking for: the engine carries on past a
+     * document it rejects, so this holds every rejection rather than only the one that stopped it,
+     * and `response["n"]` says how many of the batch were stored.
+     */
+    val writeErrors: List<Document>
+        get() = (response?.get("writeErrors") as? List<*>).orEmpty().filterIsInstance<Document>()
 }
 
 /**

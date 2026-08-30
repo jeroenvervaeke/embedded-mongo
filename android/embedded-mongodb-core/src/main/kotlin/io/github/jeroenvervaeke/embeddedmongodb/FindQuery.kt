@@ -1,6 +1,7 @@
 package io.github.jeroenvervaeke.embeddedmongodb
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
@@ -19,8 +20,10 @@ import org.bson.conversions.Bson
  * val oldest = paid.sort(Document("placed", 1)).limit(10).toList()
  * ```
  *
- * Nothing reaches the engine until [asFlow], [toList] or [firstOrNull] is called. [command] is
- * what would be sent, which is worth having when the query is being shown, logged or explained.
+ * It **is** a `Flow<Document>`, exactly as the driver's `FindFlow` is, so it can be collected
+ * directly and every `Flow` operator applies. Nothing reaches the engine until it is collected —
+ * once per collection, since it is cold. [command] is what would be sent, which is worth having
+ * when the query is being shown, logged or explained.
  *
  * "New query" is about the query, not about the documents in it: a filter, sort or projection is
  * held as the caller passed it rather than copied, so changing that [Document] afterwards changes
@@ -34,7 +37,8 @@ class FindQuery internal constructor(
     private val skip: Int? = null,
     private val limit: Int? = null,
     private val batchSize: Int? = null,
-) {
+    private val hint: Any? = null,
+) : Flow<Document> {
     /** Replaces the filter, rather than adding to it. */
     fun filter(filter: Bson): FindQuery = with(filter = filter.toDocument())
 
@@ -71,6 +75,12 @@ class FindQuery internal constructor(
         return with(batchSize = documents)
     }
 
+    /** The index to use, named by its key specification — `Indexes.ascending("customer")`. */
+    fun hint(keys: Bson): FindQuery = with(hint = keys.toDocument())
+
+    /** The index to use, named by the name it was built under. */
+    fun hintString(name: String): FindQuery = with(hint = name)
+
     /** The command this query would send. */
     fun command(): Document = Document("find", collection.name).apply {
         filter?.let { append("filter", it) }
@@ -79,6 +89,7 @@ class FindQuery internal constructor(
         skip?.let { append("skip", it) }
         limit?.let { append("limit", it) }
         batchSize?.let { append("batchSize", it) }
+        hint?.let { append("hint", it) }
     }
 
     /**
@@ -110,6 +121,23 @@ class FindQuery internal constructor(
     /** The first matching document, or `null` when nothing matched. Asks the engine for one. */
     suspend fun firstOrNull(): Document? = limit(1).asFlow().firstOrNull()
 
+    /**
+     * The first matching document.
+     *
+     * @throws NoSuchElementException if nothing matched. [firstOrNull] is the one to want when
+     *   nothing matching is an ordinary answer.
+     */
+    suspend fun first(): Document = firstOrNull() ?: throw NoSuchElementException("no document matched $this")
+
+    /**
+     * Collects this query, which is what makes it a `Flow` rather than something a `Flow` is
+     * asked for. `orders.find(paid).collect(::render)` and every operator on `Flow` work directly,
+     * as they do on the driver's own `FindFlow`.
+     */
+    override suspend fun collect(collector: FlowCollector<Document>) = asFlow().collect(collector)
+
+    override fun toString(): String = command().toJson()
+
     private fun with(
         filter: Document? = this.filter,
         sort: Document? = this.sort,
@@ -117,5 +145,6 @@ class FindQuery internal constructor(
         skip: Int? = this.skip,
         limit: Int? = this.limit,
         batchSize: Int? = this.batchSize,
-    ) = FindQuery(collection, filter, sort, projection, skip, limit, batchSize)
+        hint: Any? = this.hint,
+    ) = FindQuery(collection, filter, sort, projection, skip, limit, batchSize, hint)
 }

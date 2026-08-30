@@ -49,6 +49,37 @@ suspend fun MongoCollection.findOneAndUpdate(
 }
 
 /**
+ * Replaces the first document matching [filter] with [replacement] and returns the document, or
+ * `null` when nothing matched.
+ *
+ * [findOneAndUpdate] applies operators; this puts a whole document in place of the stored one,
+ * keeping its `_id`. A field the replacement does not carry is a field the stored document no
+ * longer has.
+ *
+ * @throws IllegalArgumentException if [replacement] holds update operators, which would be stored
+ *   as field names beginning with a dollar rather than applied.
+ * @throws EmbeddedMongoException if the engine rejected the write.
+ */
+suspend fun MongoCollection.findOneAndReplace(
+    filter: Bson,
+    replacement: Bson,
+    sort: Bson? = null,
+    projection: Bson? = null,
+    upsert: Boolean = false,
+    returning: ReturnDocument = ReturnDocument.BEFORE,
+): Document? {
+    val document = replacement.toDocument()
+    require(document.keys.none { it.startsWith('$') }) {
+        "a replacement is a whole document, not update operators: use findOneAndUpdate for $document"
+    }
+    return findAndModify(filter, sort, projection) {
+        append("update", document)
+        append("upsert", upsert)
+        append("new", returning == ReturnDocument.AFTER)
+    }
+}
+
+/**
  * Removes the first document matching [filter] and returns it, or `null` when nothing matched.
  *
  * Atomic in the way [findOneAndUpdate] is: nothing can take the document between the read and the

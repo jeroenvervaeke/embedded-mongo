@@ -15,8 +15,14 @@ import org.bson.types.ObjectId
  */
 data class InsertOneResult(val insertedId: Any?)
 
-/** What [insertMany] stored each document under, in the order they were given. */
-data class InsertManyResult(val insertedIds: List<Any?>)
+/**
+ * What [insertMany] stored each document under, keyed by its position in the list it was given.
+ *
+ * A map rather than a list, matching the driver and the Rust API of this engine: the key is the
+ * index of the document, so a caller can line an id up with the document it belongs to without
+ * counting.
+ */
+data class InsertManyResult(val insertedIds: Map<Int, Any?>)
 
 /**
  * Stores [document], giving it an `ObjectId` `_id` if it does not already have one.
@@ -43,12 +49,17 @@ suspend fun MongoCollection.insertOne(document: Bson): InsertOneResult {
  * Stores every document in [documents], giving each an `ObjectId` `_id` if it does not have one.
  *
  * [ordered] is MongoDB's own: ordered stops at the first document the engine rejects, unordered
- * carries on and reports every rejection at the end. Unordered is the one to want for independent
- * documents — a batch of seed data, say, where one bad row should cost that row and not the
- * hundreds behind it.
+ * carries on past it. Unordered is the one to want for independent documents — a batch of seed
+ * data, say, where one bad row should cost that row and not the hundreds behind it.
+ *
+ * **A rejected document is still an exception, whichever it is.** What unordered changes is what
+ * the engine did before raising it, and the exception carries that:
+ * [EmbeddedMongoException.writeErrors] holds one entry per rejected document rather than only the
+ * one that stopped the batch, and `response["n"]` is how many were stored anyway. An application
+ * that wants to carry on reads those rather than assuming nothing happened.
  *
  * @throws IllegalArgumentException if [documents] is empty, which the engine rejects outright.
- * @throws EmbeddedMongoException if the engine rejected the write.
+ * @throws EmbeddedMongoException if the engine rejected any document.
  */
 suspend fun MongoCollection.insertMany(
     documents: List<Bson>,
@@ -57,7 +68,7 @@ suspend fun MongoCollection.insertMany(
     require(documents.isNotEmpty()) { "an insert of no documents is a command the engine rejects" }
     val stored = documents.map { it.toDocument().withId() }
     insert(stored, ordered)
-    return InsertManyResult(stored.map { it[ID] })
+    return InsertManyResult(stored.withIndex().associate { (index, document) -> index to document[ID] })
 }
 
 private const val ID = "_id"

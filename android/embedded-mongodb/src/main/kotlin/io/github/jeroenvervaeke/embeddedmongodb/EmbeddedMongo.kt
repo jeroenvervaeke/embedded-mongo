@@ -14,14 +14,14 @@ import org.bson.Document
  *
  * ```
  * val mongo = EmbeddedMongo.open(context, File(context.filesDir, "shop"))
- * val orders = mongo.database("shop").collection("orders")
+ * val orders = mongo.getDatabase("shop").getCollection("orders")
  *
  * orders.insertOne(Document("customer", "ada").append("total", 12))
  * orders.createIndex(Indexes.ascending("customer"))
  * val hers = orders.find(Document("customer", "ada")).sort(Document("total", -1)).toList()
  * ```
  *
- * [database] is the way in, and [MongoDatabase] and [MongoCollection] are where the API is: find,
+ * [getDatabase] is the way in, and [MongoDatabase] and [MongoCollection] are where the API is: find,
  * aggregate, insert, update, delete, count and index, with cursors paged for the caller. This
  * class is the engine and its lifecycle — opening it, closing it, and running a command that has
  * no builder above it.
@@ -63,15 +63,18 @@ class EmbeddedMongo internal constructor(
      *
      * Nothing is created and no command is sent: naming a database that holds nothing is free, and
      * it starts existing when something is written into it.
+     *
+     * `getDatabase` rather than `database` because that is what `MongoClient` is called on in the
+     * official Java and Kotlin drivers, and code pasted from either should compile here.
      */
-    fun database(name: String): MongoDatabase = MongoDatabase(this, name)
+    fun getDatabase(name: String): MongoDatabase = MongoDatabase(this, name)
 
     /**
      * Runs [command] against [database] on the database thread and returns its reply.
      *
      * The primitive every collection and query is built from, and the last resort for a command
-     * none of them cover. Prefer [database] and the API on [MongoDatabase]: it names the database
-     * once, checks the replies, and pages the cursors.
+     * none of them cover. Prefer [getDatabase] and the API on [MongoDatabase]: it names the
+     * database once, checks the replies, and pages the cursors.
      *
      * @throws EmbeddedMongoException if the engine reports the command as failed.
      * @throws IllegalStateException if called after [close].

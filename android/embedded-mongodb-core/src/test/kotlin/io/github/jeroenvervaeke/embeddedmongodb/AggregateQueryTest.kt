@@ -27,7 +27,7 @@ class AggregateQueryTest {
     fun `stages can be added to a pipeline that was built elsewhere`() {
         val paid = FakeMongo().orders.aggregate(Document("\$match", Document("paid", true)))
 
-        val limited = paid.then(Document("\$limit", 5))
+        val limited = paid.append(Document("\$limit", 5))
 
         assertEquals(1, paid.command().pipeline().size)
         assertEquals(

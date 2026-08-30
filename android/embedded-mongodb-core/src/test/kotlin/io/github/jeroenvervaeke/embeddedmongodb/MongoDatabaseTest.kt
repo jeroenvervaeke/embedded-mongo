@@ -88,21 +88,17 @@ class MongoDatabaseTest {
     }
 
     @Test
-    fun `creating a collection that already exists is the state the caller asked for`() = runTest {
+    fun `a collection that already exists is reported, as the driver reports it`() = runTest {
+        // `create` cannot change a collection that is already there, with options or without, so
+        // swallowing the refusal would report success and leave a capped collection uncapped --
+        // and would take away the race guard an application gets from create-or-fail.
         val mongo = FakeMongo { mongoError(MongoErrorCode.NAMESPACE_EXISTS, "collection exists") }
 
-        mongo.database.createCollection("orders")
-    }
-
-    @Test
-    fun `a collection that already exists is a failure when options were named`() = runTest {
-        // `create` cannot apply options to a collection that is already there, so swallowing the
-        // refusal would report success and leave a capped collection uncapped.
-        val mongo = FakeMongo { mongoError(MongoErrorCode.NAMESPACE_EXISTS, "collection exists") }
-
-        assertFailsWith<EmbeddedMongoException> {
+        val failure = assertFailsWith<EmbeddedMongoException> {
             mongo.database.createCollection("orders", Document("capped", true).append("size", 4096))
         }
+
+        assertEquals(MongoErrorCode.NAMESPACE_EXISTS, failure.code)
     }
 
     @Test

@@ -92,7 +92,7 @@ class EmbeddedMongoTest {
         }
         val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        val read = runBlocking { mongo.database("shop").runCursorCommand(Document("find", "orders")).toList() }
+        val read = runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).toList() }
 
         assertEquals(documents(1..4), read)
     }
@@ -112,7 +112,7 @@ class EmbeddedMongoTest {
         }
         val mongo = EmbeddedMongo(engine, guard(onMainThread = false))
 
-        val read = runBlocking { mongo.database("shop").runCursorCommand(Document("find", "orders")).take(1).toList() }
+        val read = runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).take(1).toList() }
 
         assertEquals(documents(1..1), read)
         assertTrue(killed.await(5, TimeUnit.SECONDS), "the abandoned cursor was never killed")
@@ -147,7 +147,7 @@ class EmbeddedMongoTest {
         mongo.close()
 
         assertFailsWith<IllegalStateException> {
-            runBlocking { mongo.database("shop").runCursorCommand(Document("find", "orders")).toList() }
+            runBlocking { mongo.getDatabase("shop").runCursorCommand(Document("find", "orders")).toList() }
         }
     }
 

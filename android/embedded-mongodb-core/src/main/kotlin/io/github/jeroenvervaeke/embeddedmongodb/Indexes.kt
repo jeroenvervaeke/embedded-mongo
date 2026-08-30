@@ -13,8 +13,11 @@ import org.bson.conversions.Bson
  *
  * ```
  * places.createIndex(Indexes.geo2dsphere("loc"))
- * places.createIndex(Indexes.compound(Indexes.ascending("brand"), Indexes.descending("rating")))
+ * places.createIndex(Indexes.compoundIndex(Indexes.ascending("brand"), Indexes.descending("rating")))
  * ```
+ *
+ * The names are the driver's `com.mongodb.client.model.Indexes` names, so the same call written
+ * against the driver means the same thing here.
  *
  * Filters, sorts, projections and updates deliberately have no builders here: [Document] already
  * spells them clearly, and an application that wants the official ones adds
@@ -30,10 +33,21 @@ object Indexes {
     fun geo2dsphere(vararg fields: String): Bson = keys(fields, "2dsphere")
 
     /**
-     * The index `$text` reads. One collection may hold one text index, so a search over several
-     * fields names them all here rather than building an index each.
+     * The index `$text` reads, over one field.
+     *
+     * A collection may hold one text index, so a search over several fields is one compound index
+     * rather than several: `compoundIndex(text("name"), text("brand"))`. That is the driver's
+     * shape too.
      */
-    fun text(vararg fields: String): Bson = keys(fields, "text")
+    fun text(field: String): Bson = Document(field, "text")
+
+    /**
+     * A text index over every string field, which is MongoDB's `$**` wildcard.
+     *
+     * Worth knowing before reaching for it: it indexes every string in every document, so it costs
+     * accordingly. Naming the fields is usually the better index.
+     */
+    fun text(): Bson = Document("\$**", "text")
 
     /** An index over a hash of [field], which spreads values that are near each other. */
     fun hashed(field: String): Bson = Document(field, "hashed")
@@ -44,7 +58,7 @@ object Indexes {
      * Order is the whole meaning of a compound index: it can answer a query on a prefix of its
      * keys and not on a suffix.
      */
-    fun compound(vararg indexes: Bson): Bson =
+    fun compoundIndex(vararg indexes: Bson): Bson =
         Document().apply { indexes.forEach { putAll(it.toDocument()) } }
 
     private fun keys(fields: Array<out String>, value: Any): Bson {

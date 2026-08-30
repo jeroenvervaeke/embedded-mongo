@@ -8,7 +8,7 @@ import org.bson.conversions.Bson
  * One collection, and the questions worth asking about it.
  *
  * ```
- * val orders = mongo.database("shop").collection("orders")
+ * val orders = mongo.getDatabase("shop").getCollection("orders")
  *
  * orders.insertMany(listOf(first, second))
  * orders.createIndex(Indexes.ascending("customer"))

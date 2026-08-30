@@ -42,17 +42,53 @@ class CollectionWritesTest {
     }
 
     @Test
-    fun `a batch is stored in one command and every id comes back in order`() = runTest {
-        val mongo = FakeMongo { okReply("n" to 2) }
+    fun `a batch is stored in one command and every id comes back under its own position`() =
+        runTest {
+            val mongo = FakeMongo { okReply("n" to 2) }
 
-        val result = mongo.orders.insertMany(
-            listOf(Document("_id", "first"), Document("_id", "second")),
-            ordered = false,
-        )
+            val result = mongo.orders.insertMany(
+                listOf(Document("_id", "first"), Document("_id", "second")),
+                ordered = false,
+            )
 
-        assertEquals(listOf("first", "second"), result.insertedIds)
-        assertEquals(false, mongo.lastCommand["ordered"])
-        assertEquals(1, mongo.sent.size)
+            // Keyed by index rather than a list, matching the driver and the Rust API: an
+            // unordered insert is where the two would come apart.
+            assertEquals(mapOf(0 to "first", 1 to "second"), result.insertedIds)
+            assertEquals(false, mongo.lastCommand["ordered"])
+            assertEquals(1, mongo.sent.size)
+        }
+
+    @Test
+    fun `a rejected document reaches the caller with every rejection and the count that got in`() =
+        runTest {
+            // What `ordered = false` is asked for: the engine carried on, so the exception has to
+            // say what it did rather than only what stopped it.
+            val reply = Document("ok", 1.0).append("n", 1).append(
+                "writeErrors",
+                listOf(
+                    Document("index", 1).append("code", MongoErrorCode.DUPLICATE_KEY)
+                        .append("errmsg", "duplicate key"),
+                    Document("index", 2).append("code", MongoErrorCode.DUPLICATE_KEY)
+                        .append("errmsg", "duplicate key"),
+                ),
+            )
+            val mongo = FakeMongo { throw EmbeddedMongoException("duplicate key", 11000, reply) }
+
+            val failure = assertFailsWith<EmbeddedMongoException> {
+                mongo.orders.insertMany(
+                    listOf(Document("a", 1), Document("a", 2), Document("a", 3)),
+                    ordered = false,
+                )
+            }
+
+            assertEquals(MongoErrorCode.DUPLICATE_KEY, failure.code)
+            assertEquals(listOf(1, 2), failure.writeErrors.map { it["index"] })
+            assertEquals(1, failure.response?.get("n"))
+        }
+
+    @Test
+    fun `a failure that carried no reply has no write errors rather than a null one`() {
+        assertEquals(emptyList(), EmbeddedMongoException("closed", -1).writeErrors)
     }
 
     @Test

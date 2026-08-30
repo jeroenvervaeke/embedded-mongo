@@ -26,7 +26,7 @@ class CollectionIndexesTest {
         val mongo = FakeMongo { okReply() }
 
         val name = mongo.orders.createIndex(
-            Indexes.compound(Indexes.ascending("customer"), Indexes.descending("placed")),
+            Indexes.compoundIndex(Indexes.ascending("customer"), Indexes.descending("placed")),
         )
 
         assertEquals("customer_1_placed_-1", name)
@@ -47,12 +47,12 @@ class CollectionIndexesTest {
             val mongo = FakeMongo { okReply() }
 
             mongo.orders.createIndex(
-                Indexes.text("name", "brand"),
+                Indexes.compoundIndex(Indexes.text("name"), Indexes.text("brand")),
                 IndexOptions(
                     name = "search",
                     unique = true,
                     sparse = true,
-                    partialFilter = Document("paid", true),
+                    partialFilterExpression = Document("paid", true),
                     expireAfterSeconds = 60,
                     weights = Document("name", 10),
                     defaultLanguage = "english",
@@ -115,17 +115,39 @@ class CollectionIndexesTest {
     }
 
     @Test
-    fun `dropping an index that is not there is what the caller asked for, not a failure`() =
-        runTest {
-            val mongo = FakeMongo { mongoError(MongoErrorCode.INDEX_NOT_FOUND, "index not found") }
+    fun `an index that is not there is reported, as the driver reports it`() = runTest {
+        val mongo = FakeMongo { mongoError(MongoErrorCode.INDEX_NOT_FOUND, "index not found") }
 
-            mongo.orders.dropIndex("by_customer")
+        val failure = assertFailsWith<EmbeddedMongoException> { mongo.orders.dropIndex("by_customer") }
+
+        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, failure.code)
+        assertEquals(
+            Document("dropIndexes", "orders").append("index", "by_customer"),
+            mongo.lastCommand,
+        )
+    }
+
+    @Test
+    fun `a text index over several fields is one compound index, as MongoDB allows only one`() =
+        runTest {
+            val mongo = FakeMongo { okReply() }
+
+            mongo.orders.createIndex(Indexes.compoundIndex(Indexes.text("name"), Indexes.text("brand")))
 
             assertEquals(
-                Document("dropIndexes", "orders").append("index", "by_customer"),
-                mongo.lastCommand,
+                Document("name", "text").append("brand", "text"),
+                mongo.lastCommand.indexes().single()["key"],
             )
         }
+
+    @Test
+    fun `a text index over everything is MongoDB's wildcard`() = runTest {
+        val mongo = FakeMongo { okReply() }
+
+        mongo.orders.createIndex(Indexes.text())
+
+        assertEquals(Document("\$**", "text"), mongo.lastCommand.indexes().single()["key"])
+    }
 
     @Test
     fun `an index MongoDB refused for any other reason is still a failure`() = runTest {

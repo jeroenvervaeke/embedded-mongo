@@ -33,7 +33,7 @@ class EmbeddedMongoInstrumentedTest {
     private lateinit var directory: File
     private lateinit var mongo: EmbeddedMongo
 
-    private val orders: MongoCollection get() = mongo.database(DATABASE).collection(COLLECTION)
+    private val orders: MongoCollection get() = mongo.getDatabase(DATABASE).getCollection(COLLECTION)
 
     @Before
     fun openDatabase() {
@@ -83,9 +83,10 @@ class EmbeddedMongoInstrumentedTest {
         assertEquals(2, inserted.insertedIds.size)
         assertEquals(2L, orders.countDocuments())
         assertEquals(1L, orders.countDocuments(Document("value", "first")))
+        // The ids are keyed by the position of the document that got them.
         assertEquals(
             "first",
-            orders.find(Document("_id", inserted.insertedIds.first())).firstOrNull()?.getString("value"),
+            orders.find(Document("_id", inserted.insertedIds.getValue(0))).firstOrNull()?.getString("value"),
         )
     }
 
@@ -123,11 +124,32 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun droppingSomethingThatIsNotThereIsTheStateTheCallerAskedFor() = runBlocking {
+    fun droppingACollectionThatIsNotThereIsTheStateTheCallerAskedFor() = runBlocking {
         // A collection nothing has written to does not exist, and MongoDB reports dropping one as
-        // a failure. The library reads that code and answers the question that was asked.
-        mongo.database(DATABASE).collection("never-written").drop()
-        orders.dropIndex("customer_1")
+        // a failure. `drop` reads that code and answers the question that was asked, as the driver
+        // does -- while `dropIndex` reports it, also as the driver does.
+        mongo.getDatabase(DATABASE).getCollection("never-written").drop()
+
+        val failure = assertFailsWith<EmbeddedMongoException> { orders.dropIndex("no_such_index") }
+        assertEquals(MongoErrorCode.INDEX_NOT_FOUND, failure.code)
+    }
+
+    @Test
+    fun anUnorderedInsertReportsEveryDocumentItRejected() = runBlocking {
+        orders.insertMany(listOf(Document("_id", 1), Document("_id", 2)))
+
+        val failure = assertFailsWith<EmbeddedMongoException> {
+            orders.insertMany(
+                listOf(Document("_id", 1), Document("_id", 3), Document("_id", 2)),
+                ordered = false,
+            )
+        }
+
+        // Two rejections rather than the first, and the good document went in regardless.
+        assertEquals(2, failure.writeErrors.size, "${failure.writeErrors}")
+        assertEquals(MongoErrorCode.DUPLICATE_KEY, failure.code)
+        assertEquals(1L, failure.response?.let { (it["n"] as Number).toLong() })
+        assertEquals(3L, orders.countDocuments())
     }
 
     @Test
@@ -146,7 +168,7 @@ class EmbeddedMongoInstrumentedTest {
 
         val failure = assertFailsWith<EmbeddedMongoException> { orders.insertOne(order) }
 
-        assertEquals(DUPLICATE_KEY, failure.code)
+        assertEquals(MongoErrorCode.DUPLICATE_KEY, failure.code)
     }
 
     @Test
@@ -277,4 +299,3 @@ private const val COLLECTION = "orders"
 private const val ORDERS = 5000
 
 private const val COMMAND_NOT_FOUND = 59
-private const val DUPLICATE_KEY = 11000

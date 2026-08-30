@@ -25,7 +25,7 @@ internal class FakeCommands(private val reply: (Document) -> Document) : Command
 internal class FakeMongo(reply: (Document) -> Document = { okReply() }) {
     val commands = FakeCommands(reply)
     val database = MongoDatabase(commands, DATABASE)
-    val orders = database.collection(COLLECTION)
+    val orders = database.getCollection(COLLECTION)
 
     val sent: List<Document> get() = commands.commands
     val lastCommand: Document get() = commands.lastCommand

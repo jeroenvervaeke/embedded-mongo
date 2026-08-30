@@ -24,7 +24,7 @@ data class IndexOptions(
     /** Whether documents that do not have the key are left out of the index entirely. */
     val sparse: Boolean = false,
     /** Indexes only the documents matching this, which keeps a rarely-queried subset cheap. */
-    val partialFilter: Bson? = null,
+    val partialFilterExpression: Bson? = null,
     /** Deletes documents this many seconds after the indexed date. MongoDB's TTL index. */
     val expireAfterSeconds: Long? = null,
     /**
@@ -73,15 +73,17 @@ suspend fun MongoCollection.listIndexes(): List<Document> =
     runCursorCommand(Document("listIndexes", name)).toList()
 
 /**
- * Removes the index called [name]. Removing one that is not there is a no-op.
+ * Removes the index called [name].
  *
- * `_id_` cannot be removed, and asking to is a failure rather than a no-op: MongoDB reports it
- * with a code of its own, and an application that meant to drop it meant something impossible.
+ * An index that is not there is a failure, as it is in the driver: MongoDB reports
+ * [MongoErrorCode.INDEX_NOT_FOUND], and an application that wants "make sure it is gone" catches
+ * that code. `_id_` cannot be removed at all, and asking to is a failure of its own.
+ *
+ * @throws EmbeddedMongoException if there is no such index, or the engine refused to drop it.
  */
-suspend fun MongoCollection.dropIndex(name: String) =
-    ignoring(MongoErrorCode.NAMESPACE_NOT_FOUND, MongoErrorCode.INDEX_NOT_FOUND) {
-        runCommand(Document("dropIndexes", this.name).append("index", name))
-    }
+suspend fun MongoCollection.dropIndex(name: String) {
+    runCommand(Document("dropIndexes", this.name).append("index", name))
+}
 
 /**
  * The index as `createIndexes` takes it.
@@ -98,7 +100,7 @@ private fun IndexModel.specification(): Document {
         .apply {
             if (options.unique) append("unique", true)
             if (options.sparse) append("sparse", true)
-            options.partialFilter?.let { append("partialFilterExpression", it.toDocument()) }
+            options.partialFilterExpression?.let { append("partialFilterExpression", it.toDocument()) }
             options.expireAfterSeconds?.let { append("expireAfterSeconds", it) }
             options.weights?.let { append("weights", it.toDocument()) }
             options.defaultLanguage?.let { append("default_language", it) }

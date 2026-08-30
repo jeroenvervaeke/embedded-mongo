@@ -10,8 +10,8 @@ import org.bson.conversions.Bson
  * One database inside an embedded MongoDB, and the way to reach the collections in it.
  *
  * ```
- * val shop = mongo.database("shop")
- * val orders = shop.collection("orders")
+ * val shop = mongo.getDatabase("shop")
+ * val orders = shop.getCollection("orders")
  * orders.insertOne(Document("total", 12).append("paid", false))
  * val unpaid = orders.find(Document("paid", false)).sort(Document("total", -1)).toList()
  * ```
@@ -25,8 +25,14 @@ import org.bson.conversions.Bson
  * not depend on the Android library. `EmbeddedMongo.database` is the ordinary way in.
  */
 class MongoDatabase(internal val commands: CommandRunner, val name: String) {
-    /** The collection called [name] in this database. Nothing is created until something writes. */
-    fun collection(name: String): MongoCollection = MongoCollection(commands, this.name, name)
+    /**
+     * The collection called [name] in this database. Nothing is created until something writes.
+     *
+     * `getCollection` rather than `collection`, and `getDatabase` rather than `database` on the
+     * engine, because those are the names the official Java and Kotlin drivers use: code pasted
+     * from either compiles here.
+     */
+    fun getCollection(name: String): MongoCollection = MongoCollection(commands, this.name, name)
 
     /** The names of every collection in this database, the system ones included. */
     suspend fun listCollectionNames(): List<String> =
@@ -41,22 +47,21 @@ class MongoDatabase(internal val commands: CommandRunner, val name: String) {
      * Creates [name] explicitly, with [options] such as a `capped` size or a `validator`.
      *
      * Writing to a collection creates it, so this is for the cases where the shape matters before
-     * the first document does.
+     * the first document does — a `capped` size, a `validator`, a collation.
      *
-     * Creating a collection that already exists is not a failure **when no options were named**:
-     * the collection asked for is the collection there is. Naming options changes that, because
-     * `create` cannot apply them to a collection that already exists — swallowing the refusal
-     * would report success while leaving a `capped` collection uncapped, and there is nothing
-     * about the call that would say so. `collMod` through [runCommand] is how an existing
-     * collection is changed.
+     * A collection that already exists is a failure, as it is in the driver: MongoDB reports
+     * [MongoErrorCode.NAMESPACE_EXISTS] and it is reported on. An application using this as a
+     * race guard needs that; one that only wants the collection to exist can catch the code, or
+     * write to it and let the write create it.
+     *
+     * `create` cannot change a collection that is already there either way. `collMod` through
+     * [runCommand] is what does that.
+     *
+     * @throws EmbeddedMongoException if the collection exists, or the engine refused the options.
      */
     suspend fun createCollection(name: String, options: Bson? = null) {
         val create = Document("create", name)
-        if (options == null) {
-            ignoring(MongoErrorCode.NAMESPACE_EXISTS) { runCommand(create) }
-            return
-        }
-        create.putAll(options.toDocument())
+        options?.let { create.putAll(it.toDocument()) }
         runCommand(create)
     }
 
