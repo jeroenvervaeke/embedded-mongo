@@ -285,10 +285,20 @@ jobs:
 
           # A stock runner cannot spare the 7.2 GB of userdata an API 35 AVD asks for by
           # default -- the emulator refuses to start with "Not enough space to create userdata
-          # partition", tens of megabytes short, before a single test runs. This suite writes one
-          # database of about 10 MiB, so the demand is what is wrong rather than the supply.
+          # partition", as little as 45 MB short, before a single test runs. This suite writes
+          # one database of about 10 MiB, so the demand is what is wrong rather than the supply.
+          #
+          # It is the AVD's own config that decides this, not `-partition-size`: that flag sizes
+          # the system partition and leaves userdata exactly where it was.
+          config="$ANDROID_AVD_HOME/ci.avd/config.ini"
+          sed -i '/^disk\.dataPartition\.size/d' "$config"
+          echo 'disk.dataPartition.size=2048M' >> "$config"
+          # Echoed because the failure this fixes is the emulator quietly wanting the old number:
+          # a line here that does not say 2048M is the next investigation starting from fact.
+          grep '^disk\.dataPartition\.size' "$config"
+
           emulator -avd ci -no-window -no-audio -no-boot-anim -no-snapshot \
-            -partition-size 2048 -gpu swiftshader_indirect > emulator.log 2>&1 &
+            -gpu swiftshader_indirect > emulator.log 2>&1 &
           emulator_pid=$!
           # Bounded, with the emulator's own log on failure: an emulator that never starts
           # otherwise leaves adb blocking until the step's timeout, saying nothing.
