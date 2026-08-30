@@ -48,11 +48,22 @@ fun interface CommandRunner {
 public constructor, so a test — or a wrapper that traces, logs or retries — gets the whole query
 API with five lines of its own.
 
-**On a collection.** `find`, `aggregate`, `countDocuments`, `estimatedDocumentCount`, `insertOne`,
-`insertMany`, `updateOne`, `updateMany`, `replaceOne`, `deleteOne`, `deleteMany`, `createIndex`,
-`createIndexes`, `listIndexes`, `dropIndex`, `drop`.
+**On a collection.** `find`, `aggregate`, `distinct`, `countDocuments`,
+`estimatedDocumentCount`, `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,
+`findOneAndUpdate`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `createIndex`, `createIndexes`,
+`listIndexes`, `dropIndex`, `drop`.
 
 **On a database.** `collection`, `listCollectionNames`, `createCollection`, `drop`.
+
+All but `find`, `aggregate` and the two `runCommand`s are extension functions rather than members,
+and the rule is worth knowing because it is the one an application's own operations follow: a
+member is what needs the collection's private command runner, and everything else is written on
+`runCommand` exactly as you would write one. From Java they are static methods on
+`MongoCollections`.
+
+`findOneAndUpdate` and `findOneAndDelete` are the only atomic read-modify-writes here, which is
+why they exist rather than being left to `runCommand`: an `updateOne` followed by a `find` is two
+commands, and two coroutines really do interleave between them.
 
 `find` and `aggregate` return a query rather than results. Nothing reaches the engine until it is
 collected, every method on it returns a new query rather than changing the one it was called on,
@@ -62,8 +73,14 @@ prove that the pipeline on the screen is the pipeline that ran.
 ```kotlin
 val paid = orders.find(Document("paid", true))
 val newest = paid.sort(Document("placed", -1)).limit(10).toList()
-val everyOne = paid.asFlow()          // paged as the collector consumes it
+val everyOne = paid.asFlow()                  // paged as the collector consumes it
+val mine = paid.asFlow(Document::toOrder)     // parsed as it arrives
 ```
+
+There is no `Collection<T>`. `asFlow(read)` is the whole of the typed story: parsing is a function
+from a `Document`, and where a document becomes a domain object is a boundary an application owns.
+A generic parameter would mean a codec registry, which would mean the driver dependency this
+library does not have.
 
 `insertOne` and `insertMany` generate an `ObjectId` for a document that names no `_id`, and report
 what each document was stored under. Writes are journalled — see [Durability](#durability).

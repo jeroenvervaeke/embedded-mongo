@@ -1,3 +1,6 @@
+@file:JvmName("MongoCollections")
+@file:JvmMultifileClass
+
 package io.github.jeroenvervaeke.embeddedmongodb
 
 import kotlinx.coroutines.flow.toList

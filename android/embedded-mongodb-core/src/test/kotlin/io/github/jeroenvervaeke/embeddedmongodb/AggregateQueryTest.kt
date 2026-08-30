@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.bson.Document
 
@@ -69,6 +70,15 @@ class AggregateQueryTest {
         val read = mongo.orders.aggregate(Document("\$limit", 3)).toList()
 
         assertEquals(documents(1..3), read)
+    }
+
+    @Test
+    fun `documents can be read into domain types as they arrive`() = runTest {
+        val mongo = FakeMongo { singleBatch(documents(1..2)) }
+
+        val totals = mongo.orders.aggregate(Document("\$limit", 2)).asFlow { it.getInteger("n") }
+
+        assertEquals(listOf(1, 2), totals.toList())
     }
 
     @Test

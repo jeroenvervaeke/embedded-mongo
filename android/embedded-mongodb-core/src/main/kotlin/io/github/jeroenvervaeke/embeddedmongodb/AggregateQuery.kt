@@ -2,6 +2,7 @@ package io.github.jeroenvervaeke.embeddedmongodb
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import org.bson.Document
 import org.bson.conversions.Bson
@@ -66,6 +67,21 @@ class AggregateQuery internal constructor(
      * them, and killing the cursor if the collector stops early.
      */
     fun asFlow(): Flow<Document> = collection.runCursorCommand(command())
+
+
+    /**
+     * Every matching document, read by [read] as it arrives.
+     *
+     * The whole of this library's answer to typed collections: parsing is a function from a
+     * [Document], and where a document becomes a domain object is a decision an application makes
+     * once, at a boundary it owns. `map` on the returned flow would say the same thing; this saves
+     * naming it, and puts the reading next to the query it belongs to.
+     *
+     * ```
+     * val nearest = places.aggregate(pipeline).asFlow(Document::toPlace).toList()
+     * ```
+     */
+    fun <T> asFlow(read: (Document) -> T): Flow<T> = asFlow().map(read)
 
     /** Every document the pipeline produces, read into memory. */
     suspend fun toList(): List<Document> = asFlow().toList()

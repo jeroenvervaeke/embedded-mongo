@@ -24,9 +24,12 @@ import org.bson.conversions.Bson
  * ).toList()
  * ```
  *
- * Everything on a collection is an extension function rather than a member, so that reading,
- * writing, counting and indexing each live in a file of their own — and so that an application can
- * add its own operation in the same shape as the ones here, built on [runCommand].
+ * The rule for what is a member and what is an extension is worth knowing, because it is the
+ * rule an application's own operations follow too: a member is what needs this collection's
+ * private command runner, and everything else — every insert, update, delete, count, index and
+ * drop — is an extension function written on [runCommand] and [runCursorCommand], exactly as an
+ * application would write one. That also keeps reading, writing, counting and indexing in files
+ * of their own. From Java they arrive as static methods on `MongoCollections`.
  *
  * Filters, sorts, projections, updates and index keys are all `org.bson.conversions.Bson`.
  * [Document] implements it, so `Document("paid", true)` is a filter; and an application that adds
@@ -54,13 +57,6 @@ class MongoCollection internal constructor(
 
     /** [aggregate] for a pipeline written out stage by stage. */
     fun aggregate(vararg stages: Bson): AggregateQuery = aggregate(stages.asList())
-
-    /**
-     * Deletes this collection and every index on it. Dropping one that is not there is a no-op:
-     * the state asked for is the state there is.
-     */
-    suspend fun drop() =
-        ignoring(MongoErrorCode.NAMESPACE_NOT_FOUND) { runCommand(Document("drop", name)) }
 
     /**
      * Runs [command] against this collection's database and returns its reply, unread.
