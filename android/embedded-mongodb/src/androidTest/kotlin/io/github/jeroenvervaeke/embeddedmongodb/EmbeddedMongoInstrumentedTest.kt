@@ -56,7 +56,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun everyDocumentArrivesHoweverManyBatchesItTakes() = runBlocking {
+    fun everyDocumentArrivesHoweverManyBatchesItTakes(): Unit = runBlocking {
         insertOrders(ORDERS)
 
         val read = orders.find().asFlow().count()
@@ -65,7 +65,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun abandoningACursorLeavesTheDatabaseUsable() = runBlocking {
+    fun abandoningACursorLeavesTheDatabaseUsable(): Unit = runBlocking {
         insertOrders(ORDERS)
 
         val read = orders.find().asFlow().take(5).toList()
@@ -75,7 +75,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun theEngineAcceptsTheCommandsTheCollectionApiBuilds() = runBlocking {
+    fun theEngineAcceptsTheCommandsTheCollectionApiBuilds(): Unit = runBlocking {
         val inserted = orders.insertMany(
             listOf(Document("value", "first"), Document("value", "second")),
         )
@@ -91,7 +91,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun anUpdateAndADeleteReportWhatTheyReached() = runBlocking {
+    fun anUpdateAndADeleteReportWhatTheyReached(): Unit = runBlocking {
         orders.insertMany(listOf(Document("paid", false), Document("paid", false)))
 
         val updated = orders.updateMany(Document("paid", false), Document("\$set", Document("paid", true)))
@@ -103,7 +103,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun anIndexIsBuiltAndReportedByTheNameItWasBuiltUnder() = runBlocking {
+    fun anIndexIsBuiltAndReportedByTheNameItWasBuiltUnder(): Unit = runBlocking {
         orders.insertOne(Document("customer", "ada"))
 
         val name = orders.createIndex(Indexes.ascending("customer"))
@@ -113,7 +113,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun anAggregationRunsInTheEngineAndPagesItsCursor() = runBlocking {
+    fun anAggregationRunsInTheEngineAndPagesItsCursor(): Unit = runBlocking {
         insertOrders(ORDERS)
 
         val grouped = orders.aggregate(
@@ -124,7 +124,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun droppingACollectionThatIsNotThereIsTheStateTheCallerAskedFor() = runBlocking {
+    fun droppingACollectionThatIsNotThereIsTheStateTheCallerAskedFor(): Unit = runBlocking {
         // A collection nothing has written to does not exist, and MongoDB reports dropping one as
         // a failure. `drop` reads that code and answers the question that was asked, as the
         // driver does.
@@ -132,7 +132,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun droppingAnIndexReportsWhatTheEngineReports() = runBlocking {
+    fun droppingAnIndexReportsWhatTheEngineReports(): Unit = runBlocking {
         // Measured here rather than taken from the driver's documentation, which disagrees: the
         // driver raises IndexNotFound for a name that is not there, and this engine does not
         // treat that as a failure at all. Only a device can settle that -- the JVM test beside
@@ -156,7 +156,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun anUnorderedInsertReportsEveryDocumentItRejected() = runBlocking {
+    fun anUnorderedInsertReportsEveryDocumentItRejected(): Unit = runBlocking {
         orders.insertMany(listOf(Document("_id", 1), Document("_id", 2)))
 
         val failure = assertFailsWith<EmbeddedMongoException> {
@@ -183,7 +183,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun aDuplicateKeyIsRaisedEvenThoughTheCommandItselfSucceeds() = runBlocking {
+    fun aDuplicateKeyIsRaisedEvenThoughTheCommandItselfSucceeds(): Unit = runBlocking {
         val order = Document("_id", 1)
         orders.insertOne(order)
 
@@ -237,7 +237,7 @@ class EmbeddedMongoInstrumentedTest {
     }
 
     @Test
-    fun documentsSurviveClosingAndReopening() = runBlocking {
+    fun documentsSurviveClosingAndReopening(): Unit = runBlocking {
         insertOrders(ORDERS)
         mongo.close()
 
