@@ -33,10 +33,18 @@ pub(crate) struct CommandSlot {
 
 enum Slot {
     Waiting,
-    Running(Killer),
+    Running(Interrupt),
     Finished,
     Cancelled,
 }
+
+/// What a slot calls to stop the command it is holding open.
+///
+/// A boxed closure rather than the [`Killer`] itself, so the state machine below can be tested
+/// without an engine: the transition that matters most -- that a cancel arriving after the
+/// command finished interrupts *nothing* -- is a property of these states alone, and proving it
+/// should not require racing a real session.
+type Interrupt = Box<dyn Fn() + Send>;
 
 impl SessionPool {
     /// Opens `count` sessions. The caller has already turned a requested pool size into a
@@ -71,7 +79,12 @@ impl SessionPool {
         command: &[u8],
     ) -> Option<Result<Vec<u8>>> {
         let session = self.checkout();
-        if !slot.start(session.killer()) {
+        let killer = session.killer();
+        if !slot.start(Box::new(move || {
+            // Nothing to do about a failure: the caller is gone, and a session that refuses to
+            // be interrupted simply finishes its command as it would have anyway.
+            let _ = killer.kill();
+        })) {
             return None;
         }
         let result = session.run_command(database, command);
@@ -112,21 +125,19 @@ impl CommandSlot {
     /// this deciding to interrupt and actually doing so.
     pub(crate) fn cancel(&self) {
         let mut state = lock(&self.state);
-        if let Slot::Running(killer) = &*state {
-            // Nothing to do about a failure: the caller is gone, and a session that refuses to
-            // be interrupted simply finishes its command as it would have anyway.
-            let _ = killer.kill();
+        if let Slot::Running(interrupt) = &*state {
+            interrupt();
         }
         *state = Slot::Cancelled;
     }
 
     /// Hands the slot the means to interrupt the session now running its command. Answers
     /// whether the command should run at all -- `false` once it has been cancelled.
-    fn start(&self, killer: Killer) -> bool {
+    fn start(&self, interrupt: Interrupt) -> bool {
         let mut state = lock(&self.state);
         match *state {
             Slot::Waiting => {
-                *state = Slot::Running(killer);
+                *state = Slot::Running(interrupt);
                 true
             }
             _ => false,
@@ -185,4 +196,107 @@ impl Drop for Checkout<'_> {
 /// `limits::process` does with its own.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandSlot, Interrupt};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An interrupt that counts rather than kills, so the transitions can be checked without a
+    /// session to interrupt.
+    fn counting() -> (Interrupt, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        (
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+            }),
+            calls,
+        )
+    }
+
+    #[test]
+    fn a_running_command_is_interrupted_when_the_caller_stops_waiting() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        assert!(
+            slot.start(interrupt),
+            "a fresh slot should accept a command"
+        );
+        slot.cancel();
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// The safety property the whole design turns on. A session goes back into the pool the
+    /// moment its command ends, so an interrupt that arrived a moment later would land on
+    /// whatever borrowed it next. Disarming first is what rules that out.
+    #[test]
+    fn a_command_that_already_finished_is_not_interrupted() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        assert!(slot.start(interrupt));
+        slot.finish();
+        slot.cancel();
+
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "cancelling after the command finished must interrupt nothing -- the session may \
+             already be running somebody else's command"
+        );
+    }
+
+    #[test]
+    fn a_command_cancelled_before_it_starts_is_never_run() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        slot.cancel();
+
+        assert!(
+            !slot.start(interrupt),
+            "a slot cancelled while queued should refuse to run its command at all"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "a command that never ran has nothing to interrupt"
+        );
+    }
+
+    /// Cancelling twice is ordinary: the drop guard fires on every exit, including after a
+    /// caller has already given up.
+    #[test]
+    fn cancelling_twice_interrupts_once() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        assert!(slot.start(interrupt));
+        slot.cancel();
+        slot.cancel();
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn finishing_a_cancelled_command_does_not_revive_it() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        assert!(slot.start(interrupt));
+        slot.cancel();
+        slot.finish();
+        slot.cancel();
+
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "a disarm arriving after the cancel must not put the slot back in a killable state"
+        );
+    }
 }
