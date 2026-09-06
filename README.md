@@ -31,7 +31,7 @@ process.**
   - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
   - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of sessions, up to a configurable count.
+- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of command strands, up to a configurable count.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
 ## Deployment model
@@ -270,7 +270,12 @@ sibling `mongo-python-driver` checkout. It also accepts normal Python arguments:
 ./scripts/python -m pip install another-package
 ```
 
-Set `PYMONGO_SOURCE` if the PyMongo checkout is elsewhere.
+Set `PYMONGO_SOURCE` if the PyMongo checkout is elsewhere. The binding's own tests run through
+the same runner, and are not part of CI because they need that checkout:
+
+```sh
+./scripts/python -m unittest discover -s python/tests
+```
 
 To build a distributable wheel containing the native engine:
 
@@ -290,6 +295,11 @@ the engine can be vendored into one, not as a distribution.
 The initial binding supports synchronous PyMongo 4.18 commands, including normal CRUD, cursors,
 aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,
 transactions, change streams, exhaust cursors, and async PyMongo are not supported.
+
+Threads run in parallel. Every connection PyMongo hands out reaches the same engine, which runs
+commands over a pool of eight command strands, so eight threads issue eight commands at once
+rather than queueing behind one another. PyMongo's own `maxPoolSize` is the other ceiling, and a
+fan-out gets the smaller of the two.
 
 ## What this unlocks
 
