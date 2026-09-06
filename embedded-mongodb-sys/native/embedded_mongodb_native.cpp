@@ -71,20 +71,16 @@ int translateErrors(char** error, Function&& function) noexcept {
 struct embedded_mongodb_handle {
     embedded_mongodb_handle(std::string path,
                             const embedded_mongodb::ResolvedOptions& options)
-        : runtime(std::make_shared<embedded_mongodb::Runtime>(std::move(path), options)) {}
+        : runtime(std::move(path), options) {}
 
-    // Shared with every session so the Runtime *object* is never freed under one: a command on
-    // a session whose handle has been closed then reads a null ServiceContext and fails
-    // cleanly, rather than dereferencing freed memory. It does not keep the engine *running* --
-    // `close` still tears the ServiceContext down -- so a session destroyed after that close
-    // would still touch a dead service. Nothing here prevents that; the Rust layer does, by
-    // holding an Arc on the runtime in every session so the handle cannot close while one lives.
-    std::shared_ptr<embedded_mongodb::Runtime> runtime;
+    embedded_mongodb::Runtime runtime;
 };
 
 struct embedded_mongodb_session {
-    explicit embedded_mongodb_session(std::shared_ptr<embedded_mongodb::Runtime> runtime)
-        : session(std::move(runtime)) {}
+    // Borrows the handle's runtime. Every session must be closed before its handle is; the
+    // safe Rust layer guarantees that by holding an Arc on the runtime in each session, so
+    // nothing is reference-counted twice here.
+    explicit embedded_mongodb_session(embedded_mongodb::Runtime& runtime) : session(runtime) {}
 
     embedded_mongodb::Session session;
 };
@@ -172,8 +168,8 @@ int embedded_mongodb_session_close(embedded_mongodb_session* session, char** err
 int embedded_mongodb_close(embedded_mongodb_handle* handle, char** error) noexcept {
     return translateErrors(error, [&] {
         std::unique_ptr<embedded_mongodb_handle> owner(handle);
-        if (owner && owner->runtime) {
-            owner->runtime->close();
+        if (owner) {
+            owner->runtime.close();
         }
     });
 }

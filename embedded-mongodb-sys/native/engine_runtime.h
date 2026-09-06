@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,10 +43,9 @@ public:
     /// Shuts the engine down and reports what failed on the way. The destructor does the same
     /// work silently, so a caller who does not want to hear about it can simply drop this.
     ///
-    /// Every session opened on this runtime must be gone before this runs. Sessions hold a
-    /// shared reference to the runtime, so the object cannot be freed under them; but this
-    /// tears the engine down, and a session that outlived it would hold a client of a service
-    /// that no longer exists. The safe Rust layer drops its sessions before it closes.
+    /// Every session opened on this runtime must be gone before this runs: a session that
+    /// outlived it would hold a client of a service that no longer exists, and destroying that
+    /// client would reach into freed memory. The safe Rust layer drops its sessions first.
     void close();
 
 private:
@@ -71,12 +69,14 @@ private:
 /// open, and handing them out, is the caller's job -- there is no pool here, because a pool is
 /// policy and belongs in the Rust layer that has a checked language to write it in.
 ///
-/// A session keeps its runtime alive by holding a shared reference to it, so it can never bind
-/// a client of a runtime that has been freed. It must still be destroyed before the runtime is
-/// *closed*: see [`Runtime::close`].
+/// A session borrows the runtime that owns its client: destroying the strand deregisters that
+/// client from the runtime's Service, so the runtime must outlive every session opened on it.
+/// Nothing here enforces that, deliberately -- the safe Rust layer does, by giving each session
+/// an `Arc` on the runtime handle, which is what keeps the handle from closing while a session
+/// lives. Ownership rules are policy, and policy lives in the language that checks it.
 class Session {
 public:
-    explicit Session(std::shared_ptr<Runtime> runtime);
+    explicit Session(Runtime& runtime);
 
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -86,11 +86,7 @@ public:
                                          std::size_t commandLen);
 
 private:
-    // Order is load-bearing: members destroy in reverse declaration order, so `_strand` (the
-    // Client) is torn down before this session's `_runtime` reference is released. Destroying a
-    // Client deregisters it from its Service, so the Service must still be alive at that point;
-    // declaring `_runtime` first keeps it alive across the strand's destruction. Do not reorder.
-    std::shared_ptr<Runtime> _runtime;
+    Runtime& _runtime;
     mongo::ClientStrandPtr _strand;
 };
 

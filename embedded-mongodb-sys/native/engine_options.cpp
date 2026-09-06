@@ -83,19 +83,18 @@ std::uint32_t valueOrDefault(std::uint32_t value, std::uint32_t fallback) {
     return value == 0 ? fallback : value;
 }
 
+/// The tri-state journal-prealloc enum, mapped the same way the numeric options are: anything
+/// that is not one of the two explicit choices -- including the zero that means "unset" -- takes
+/// the library default. Which values are legal is the Rust `Preallocation` enum's business.
 bool resolvePrealloc(std::uint32_t value) {
     switch (value) {
-        case EMBEDDED_MONGODB_JOURNAL_PREALLOC_DEFAULT:
-            return kDefaultJournalPrealloc;
         case EMBEDDED_MONGODB_JOURNAL_PREALLOC_ENABLED:
             return true;
         case EMBEDDED_MONGODB_JOURNAL_PREALLOC_DISABLED:
             return false;
+        default:
+            return kDefaultJournalPrealloc;
     }
-    uasserted(13180011,
-              "embedded MongoDB option journal_prealloc must be one of "
-              "embedded_mongodb_journal_prealloc, got " +
-                  std::to_string(value));
 }
 
 }  // namespace

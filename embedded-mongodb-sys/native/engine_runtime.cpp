@@ -64,8 +64,8 @@ void Runtime::close() {
     cleanup(true);
 }
 
-Session::Session(std::shared_ptr<Runtime> runtime) : _runtime(std::move(runtime)) {
-    auto* serviceContext = _runtime->serviceContext();
+Session::Session(Runtime& runtime) : _runtime(runtime) {
+    auto* serviceContext = _runtime.serviceContext();
     uassert(13180006, "embedded MongoDB runtime is closed", serviceContext);
     // Each session is a distinct client, so the engine sees N of them exactly as a server sees
     // N connections. Made here, once, rather than per command: binding a client is cheap,
@@ -77,7 +77,7 @@ Session::Session(std::shared_ptr<Runtime> runtime) : _runtime(std::move(runtime)
 std::vector<std::uint8_t> Session::runCommand(std::string_view database,
                                               const std::uint8_t* command,
                                               std::size_t commandLen) {
-    auto* serviceContext = _runtime->serviceContext();
+    auto* serviceContext = _runtime.serviceContext();
     uassert(13180001, "embedded MongoDB runtime is closed", serviceContext);
     uassert(13180002, "invalid database name", mongo::DatabaseName::validDBName(database));
     uassert(13180003, "BSON command is empty", command && commandLen);
