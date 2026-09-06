@@ -6,7 +6,10 @@ use super::{
     inspect::{access_path, count, names, number, report_validation, summary},
 };
 use anyhow::{Context, Result};
-use embedded_mongodb::{Client, Database, bson::doc};
+use embedded_mongodb::{
+    blocking::{Client, Database},
+    bson::doc,
+};
 use std::{path::Path, time::Instant};
 
 /// Buckets sampled by [`verify_index`]. Every one of them is checked three ways; a handful is

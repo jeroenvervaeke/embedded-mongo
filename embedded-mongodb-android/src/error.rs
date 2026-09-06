@@ -122,8 +122,11 @@ impl From<EmbeddedError> for BridgeError {
             // MongoDB's own, which an open reports as it failed rather than putting back. Both
             // are named anyway, because naming them here rather than under a wildcard is what
             // makes a new variant a compile error.
+            // `EngineThread` cannot occur either: it belongs to the async layer's opens, and
+            // this binding opens through the blocking client, which starts no workers.
             EmbeddedError::Bson(_)
             | EmbeddedError::Closed
+            | EmbeddedError::EngineThread(_)
             | EmbeddedError::FreeDiskFloorNotRestored { .. }
             | EmbeddedError::InvalidArgument(_)
             | EmbeddedError::InvalidResponse(_)

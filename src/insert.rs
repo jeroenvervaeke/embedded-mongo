@@ -1,4 +1,4 @@
-use crate::{Collection, Error, Result};
+use crate::{Error, Result, collection::Collection};
 use bson::{Bson, Document, oid::ObjectId};
 use serde::Serialize;
 use std::{borrow::Borrow, collections::HashMap};
@@ -19,10 +19,7 @@ impl<T: Serialize> Collection<'_, T> {
         let inserted_id = ensure_id(&mut document);
         let response = self.client().run_command(
             self.database_name(),
-            &bson::doc! {
-                "insert": self.name(),
-                "documents": [document],
-            },
+            &insert_command(self.name(), vec![Bson::Document(document)]),
         )?;
         expect_inserted_count(&response, 1)?;
         Ok(InsertOneResult { inserted_id })
@@ -32,34 +29,48 @@ impl<T: Serialize> Collection<'_, T> {
         &self,
         documents: impl IntoIterator<Item = impl Borrow<T>>,
     ) -> Result<InsertManyResult> {
-        let mut serialized = Vec::new();
-        let mut inserted_ids = HashMap::new();
-
-        for (index, document) in documents.into_iter().enumerate() {
-            let mut document = bson::serialize_to_document(document.borrow())?;
-            inserted_ids.insert(index, ensure_id(&mut document));
-            serialized.push(Bson::Document(document));
-        }
-        if serialized.is_empty() {
-            return Err(Error::InvalidArgument(
-                "insert_many requires at least one document",
-            ));
-        }
-
+        let (serialized, inserted_ids) = serialize_many(documents)?;
         let expected = serialized.len();
         let response = self.client().run_command(
             self.database_name(),
-            &bson::doc! {
-                "insert": self.name(),
-                "documents": serialized,
-            },
+            &insert_command(self.name(), serialized),
         )?;
         expect_inserted_count(&response, expected)?;
         Ok(InsertManyResult { inserted_ids })
     }
 }
 
-fn ensure_id(document: &mut Document) -> Bson {
+// Everything below is shared with the async layer in `crate::nonblocking`: serialization and
+// id assignment happen on whichever thread the caller holds, and what an insert says to the
+// engine is one fact, however it is dispatched.
+
+pub(crate) fn insert_command(collection: &str, documents: Vec<Bson>) -> Document {
+    bson::doc! {
+        "insert": collection,
+        "documents": documents,
+    }
+}
+
+pub(crate) fn serialize_many<T: Serialize>(
+    documents: impl IntoIterator<Item = impl Borrow<T>>,
+) -> Result<(Vec<Bson>, HashMap<usize, Bson>)> {
+    let mut serialized = Vec::new();
+    let mut inserted_ids = HashMap::new();
+
+    for (index, document) in documents.into_iter().enumerate() {
+        let mut document = bson::serialize_to_document(document.borrow())?;
+        inserted_ids.insert(index, ensure_id(&mut document));
+        serialized.push(Bson::Document(document));
+    }
+    if serialized.is_empty() {
+        return Err(Error::InvalidArgument(
+            "insert_many requires at least one document",
+        ));
+    }
+    Ok((serialized, inserted_ids))
+}
+
+pub(crate) fn ensure_id(document: &mut Document) -> Bson {
     if let Some(id) = document.get("_id") {
         return id.clone();
     }
@@ -68,7 +79,7 @@ fn ensure_id(document: &mut Document) -> Bson {
     id
 }
 
-fn expect_inserted_count(response: &Document, expected: usize) -> Result<()> {
+pub(crate) fn expect_inserted_count(response: &Document, expected: usize) -> Result<()> {
     let actual = match response.get("n") {
         Some(Bson::Int32(value)) => usize::try_from(*value).ok(),
         Some(Bson::Int64(value)) => usize::try_from(*value).ok(),

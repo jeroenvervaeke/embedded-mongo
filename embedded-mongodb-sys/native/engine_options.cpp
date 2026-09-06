@@ -48,14 +48,14 @@ constexpr std::uint32_t kDefaultJournalFileMaxKB = 8 * 1024;
 // writing thread. tests/durability is what actually settles it.
 constexpr bool kDefaultJournalPrealloc = false;
 
-// WiredTiger's own limits, from src/third_party/wiredtiger/src/config/config_def.c, where
-// cache_size is "min=1MB,max=10TB" and log.file_max is "min=100KB,max=2GB". Checking them
-// here turns a value WiredTiger would reject inside wiredtiger_open -- where it surfaces as
-// an opaque EINVAL from a C library -- into a named error before anything is opened.
-constexpr std::uint32_t kMinCacheSizeMB = 1;
-constexpr std::uint32_t kMaxCacheSizeMB = 10 * 1000 * 1000;
-constexpr std::uint32_t kMinJournalFileMaxKB = 100;
-constexpr std::uint32_t kMaxJournalFileMaxKB = 2 * 1024 * 1024;
+// The range each of these must fall in -- WiredTiger's own, from config_def.c -- is not
+// checked here. The only caller of this ABI is this project's Rust crate, pinned to this exact
+// source by the build's freshness check, and it validates every value against those same
+// bounds before the value is ever built (the `CacheSize` / `JournalFileSize` newtypes in
+// `options.rs`, which cite the same config_def.c). Re-checking here would be the one WiredTiger
+// fact written down in two languages; a value out of range would in any case surface as a
+// thrown open error, not a silent bad state. What stays here is the one thing Rust cannot know:
+// what the library's own default is when nothing was asked for.
 
 /// Copies as much of the caller's struct as the caller says exists, leaving everything past
 /// it zero. Reading a member the caller never allocated would be a read off the end of their
@@ -78,35 +78,23 @@ embedded_mongodb_open_options requested(const embedded_mongodb_open_options* opt
     return copy;
 }
 
-std::uint32_t inRange(std::uint32_t value,
-                      std::uint32_t low,
-                      std::uint32_t high,
-                      std::uint32_t fallback,
-                      const char* name) {
-    if (value == 0) {
-        return fallback;
-    }
-    uassert(13180010,
-            std::string("embedded MongoDB option ") + name + " must be between " +
-                std::to_string(low) + " and " + std::to_string(high) + ", got " +
-                std::to_string(value),
-            value >= low && value <= high);
-    return value;
+/// Zero is "the caller asked for nothing", which every field reads as its library default.
+std::uint32_t valueOrDefault(std::uint32_t value, std::uint32_t fallback) {
+    return value == 0 ? fallback : value;
 }
 
+/// The tri-state journal-prealloc enum, mapped the same way the numeric options are: anything
+/// that is not one of the two explicit choices -- including the zero that means "unset" -- takes
+/// the library default. Which values are legal is the Rust `Preallocation` enum's business.
 bool resolvePrealloc(std::uint32_t value) {
     switch (value) {
-        case EMBEDDED_MONGODB_JOURNAL_PREALLOC_DEFAULT:
-            return kDefaultJournalPrealloc;
         case EMBEDDED_MONGODB_JOURNAL_PREALLOC_ENABLED:
             return true;
         case EMBEDDED_MONGODB_JOURNAL_PREALLOC_DISABLED:
             return false;
+        default:
+            return kDefaultJournalPrealloc;
     }
-    uasserted(13180011,
-              "embedded MongoDB option journal_prealloc must be one of "
-              "embedded_mongodb_journal_prealloc, got " +
-                  std::to_string(value));
 }
 
 }  // namespace
@@ -126,16 +114,8 @@ std::string ResolvedOptions::wiredTigerJournalConfig() const {
 ResolvedOptions resolveOptions(const embedded_mongodb_open_options* options) {
     const auto asked = requested(options);
     return ResolvedOptions{
-        .cacheSizeMB = inRange(asked.cache_size_mb,
-                               kMinCacheSizeMB,
-                               kMaxCacheSizeMB,
-                               kDefaultCacheSizeMB,
-                               "cache_size_mb"),
-        .journalFileMaxKB = inRange(asked.journal_file_max_kb,
-                                    kMinJournalFileMaxKB,
-                                    kMaxJournalFileMaxKB,
-                                    kDefaultJournalFileMaxKB,
-                                    "journal_file_max_kb"),
+        .cacheSizeMB = valueOrDefault(asked.cache_size_mb, kDefaultCacheSizeMB),
+        .journalFileMaxKB = valueOrDefault(asked.journal_file_max_kb, kDefaultJournalFileMaxKB),
         .journalPrealloc = resolvePrealloc(asked.journal_prealloc),
     };
 }
@@ -146,8 +126,9 @@ void applyOptions(const ResolvedOptions& options) {
     //
     // Its documented 256 MB minimum is reached only on the branch that computes a size from
     // system memory, i.e. only when nothing was asked for. A caller who asks for less than
-    // 256 MB silently gets less, down to WiredTiger's own 1 MB floor, which is why the range
-    // check above is this library's job rather than MongoDB's.
+    // 256 MB silently gets less, down to WiredTiger's own 1 MB floor, which is why keeping the
+    // request inside WiredTiger's range is this library's job rather than MongoDB's -- a job
+    // the Rust `CacheSize` newtype does before the value ever reaches here.
     mongo::wiredTigerGlobalOptions.cacheSizeGB = options.cacheSizeMB / 1024.0;
     mongo::wiredTigerGlobalOptions.engineConfig = options.wiredTigerJournalConfig();
 

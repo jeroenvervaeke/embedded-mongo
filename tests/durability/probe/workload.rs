@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{Context, Result};
 use embedded_mongodb::{
-    Client, Database,
+    blocking::{Client, Database},
     bson::{Bson, doc},
 };
 use std::path::Path;

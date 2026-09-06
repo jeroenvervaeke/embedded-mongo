@@ -26,13 +26,16 @@ pub(crate) mod bridge {
         include!("embedded-mongodb/bridge.h");
 
         type EmbeddedMongo;
+        type EmbeddedSession;
 
         fn open(path: &str) -> Result<UniquePtr<EmbeddedMongo>>;
         fn open_with_options(
             path: &str,
             options: &NativeOpenOptions,
         ) -> Result<UniquePtr<EmbeddedMongo>>;
-        fn run_command(self: &EmbeddedMongo, database: &str, command: &[u8]) -> Result<Vec<u8>>;
+        fn open_session(self: &EmbeddedMongo) -> Result<UniquePtr<EmbeddedSession>>;
+        fn run_command(self: &EmbeddedSession, database: &str, command: &[u8]) -> Result<Vec<u8>>;
+        fn kill(self: &EmbeddedSession) -> Result<()>;
         fn close(self: Pin<&mut EmbeddedMongo>) -> Result<()>;
     }
 }

@@ -5,7 +5,7 @@
 //! engine.
 
 use super::Namespace;
-use crate::{Client, Cursor, Error, Result};
+use crate::{Error, Result, client::Client, find::Cursor};
 use bson::{Bson, Document, doc};
 
 /// Whether `validate` should fix what it finds.

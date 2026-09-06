@@ -61,31 +61,19 @@ EmbeddedMongo::~EmbeddedMongo() {
     embedded_mongodb_free(error);
 }
 
-rust::Vec<std::uint8_t> EmbeddedMongo::run_command(
-    rust::Str database, rust::Slice<const std::uint8_t> command) const {
+std::unique_ptr<EmbeddedSession> EmbeddedMongo::open_session() const {
     if (!handle_) {
         throw std::runtime_error("embedded MongoDB client is closed");
     }
 
-    embedded_mongodb_buffer response{};
+    embedded_mongodb_session* session = nullptr;
     char* error = nullptr;
-    const auto status = embedded_mongodb_run_command(handle_,
-                                                     database.data(),
-                                                     database.size(),
-                                                     command.data(),
-                                                     command.size(),
-                                                     &response,
-                                                     &error);
+    const auto status = embedded_mongodb_session_open(handle_, &session, &error);
     throw_if_error(status, error);
-
-    std::unique_ptr<void, decltype(&embedded_mongodb_free)> owner(
-        response.data, &embedded_mongodb_free);
-    rust::Vec<std::uint8_t> result;
-    result.reserve(response.len);
-    for (std::size_t index = 0; index < response.len; ++index) {
-        result.push_back(response.data[index]);
+    if (!session) {
+        throw std::runtime_error("embedded MongoDB returned a null session");
     }
-    return result;
+    return std::unique_ptr<EmbeddedSession>(new EmbeddedSession(session));
 }
 
 void EmbeddedMongo::close() {
@@ -97,6 +85,56 @@ void EmbeddedMongo::close() {
     const auto status =
         embedded_mongodb_close(std::exchange(handle_, nullptr), &error);
     throw_if_error(status, error);
+}
+
+EmbeddedSession::EmbeddedSession(embedded_mongodb_session* session) noexcept : session_(session) {}
+
+EmbeddedSession::~EmbeddedSession() {
+    if (!session_) {
+        return;
+    }
+
+    char* error = nullptr;
+    embedded_mongodb_session_close(std::exchange(session_, nullptr), &error);
+    embedded_mongodb_free(error);
+}
+
+void EmbeddedSession::kill() const {
+    if (!session_) {
+        // Closed sessions run nothing, so there is nothing to interrupt.
+        return;
+    }
+
+    char* error = nullptr;
+    const auto status = embedded_mongodb_session_kill(session_, &error);
+    throw_if_error(status, error);
+}
+
+rust::Vec<std::uint8_t> EmbeddedSession::run_command(
+    rust::Str database, rust::Slice<const std::uint8_t> command) const {
+    if (!session_) {
+        throw std::runtime_error("embedded MongoDB session is closed");
+    }
+
+    embedded_mongodb_buffer response{};
+    char* error = nullptr;
+    const auto status = embedded_mongodb_session_run_command(session_,
+                                                             database.data(),
+                                                             database.size(),
+                                                             command.data(),
+                                                             command.size(),
+                                                             &response,
+                                                             &error);
+    throw_if_error(status, error);
+
+    std::unique_ptr<void, decltype(&embedded_mongodb_free)> owner(
+        response.data, &embedded_mongodb_free);
+    rust::Vec<std::uint8_t> result;
+    result.reserve(response.len);
+    for (std::size_t index = 0; index < response.len; ++index) {
+        result.push_back(response.data[index]);
+    }
+    return result;
 }
 
 std::unique_ptr<EmbeddedMongo> open(rust::Str path) {

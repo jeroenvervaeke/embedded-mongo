@@ -36,7 +36,7 @@ pub use floor::FreeDiskFloor;
 pub use knobs::{IndexBuildFloor, QuerySpillingFloor, ReportedFloors};
 pub use process::ProcessLimits;
 
-use crate::{Client, Result};
+use crate::{Result, client::Client};
 use bson::Document;
 
 /// The one thing the floors need of an open engine: a command on `admin`, and its reply.

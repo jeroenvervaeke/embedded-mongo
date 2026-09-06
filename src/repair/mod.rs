@@ -61,7 +61,7 @@ mod namespace;
 mod origin;
 mod report;
 
-use crate::{Client, Error, Result};
+use crate::{Error, Result, client::Client};
 use announce::{announce_damage, announce_repair, announce_residual_damage};
 use commands::{Mode, namespaces, validate};
 use marker::{Marker, MarkerState};

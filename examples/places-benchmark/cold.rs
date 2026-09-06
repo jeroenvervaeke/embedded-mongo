@@ -5,7 +5,7 @@ use crate::{
     rss::{Sampler, peak_rss},
 };
 use anyhow::{Context, Result};
-use embedded_mongodb::{Client, bson::doc};
+use embedded_mongodb::{blocking::Client, bson::doc};
 use std::{
     path::{Path, PathBuf},
     process::Command,

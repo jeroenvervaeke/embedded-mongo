@@ -14,7 +14,7 @@
 mod fixture;
 
 use embedded_mongodb::{
-    Client,
+    blocking::Client,
     bson::{Bson, Document, doc},
 };
 

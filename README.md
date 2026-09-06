@@ -31,7 +31,7 @@ process.**
   - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
   - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
+- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of sessions, up to a configurable count.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
 ## Deployment model
@@ -136,16 +136,25 @@ again to see the result.
 
 ## Quick start
 
-Open a directory, insert a document, and query it back:
+Open a directory, insert a document, and query it back. The crate-root API is async — every
+command is dispatched to a pool of dedicated engine threads (one per command strand, eight by
+default), so an `.await` parks a task, never a runtime thread:
 
 ```rust
 use embedded_mongodb::bson::doc;
 
-let client = embedded_mongodb::Client::new("./data")?;
+let client = embedded_mongodb::Client::new("./data").await?;
 let items = client.database("app").collection("items");
-let inserted = items.insert_one(doc! { "name": "embedded" })?;
-let item = items.find_one(doc! { "_id": inserted.inserted_id })?;
+let inserted = items.insert_one(doc! { "name": "embedded" }).await?;
+let item = items.find_one(doc! { "_id": inserted.inserted_id }).await?;
 println!("{item:?}");
+```
+
+The same API exists synchronously as `embedded_mongodb::blocking` for callers without an async
+runtime — the Python and Android bindings go through it:
+
+```rust
+let client = embedded_mongodb::blocking::Client::new("./data")?;
 ```
 
 ### Storage limits
@@ -168,7 +177,7 @@ That window did not widen: over ten killed runs each, the tail lost was 43-511 w
 mongod's journal settings and 114-464 at these — overlapping ranges, with the worst single
 run belonging to mongod's settings.
 
-The cache and the free-space floors are left where they were, and all four are settable:
+The cache and the free-space floors are left where they were, and all five are settable:
 
 | Limit | Default | Set through |
 | --- | --- | --- |
@@ -176,6 +185,7 @@ The cache and the free-space floors are left where they were, and all four are s
 | Journal pre-allocation | off (mongod: on) | `Client::with_options` |
 | WiredTiger cache | 256 MB | `Client::with_options` |
 | Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `Client::process_limits` at any time |
+| Parallel commands (strand pool) | 8 | `Client::with_options` |
 
 The cache figure is the value this engine has always used, and is also the floor mongod will
 not go below on a server; mongod's *default* is half of system memory above the first
@@ -184,12 +194,13 @@ grows into rather than memory it takes, and a cold read-only process at Ireland 
 well under it, so it is exposed for tuning rather than because the default is wrong.
 
 ```rust
-use embedded_mongodb::{Client, FreeDiskFloor, JournalFileSize, OpenOptions};
+use embedded_mongodb::{Client, CommandStrands, FreeDiskFloor, JournalFileSize, OpenOptions};
 
 let options = OpenOptions::new()
     .journal_file_size(JournalFileSize::from_kibibytes(2048)?)
-    .free_disk_floor(FreeDiskFloor::from_mebibytes(32)?);
-let client = Client::with_options("./data", options)?;
+    .free_disk_floor(FreeDiskFloor::from_mebibytes(32)?)
+    .command_strands(CommandStrands::from_count(4)?);
+let client = Client::with_options("./data", options).await?;
 ```
 
 Anything left unset keeps the engine's own default, so `Client::new(path)` and
@@ -509,7 +520,9 @@ is linked statically, which costs a couple of megabytes and keeps a published li
   lifecycle and Bazel dependency work.
 - Many server components assume one global runtime. Multiple simultaneous `Client` values or
   different active database directories are rejected.
-- Commands issued through one `Client` are thread-safe but serialized, not run in parallel.
+- Commands issued through one `Client` are thread-safe and run in parallel up to the engine's
+  command-strand count (`OpenOptions::command_strands`, default 8); commands beyond it wait for
+  a strand to come free.
 - There is no process isolation: a MongoDB fatal invariant, memory fault, or abort terminates the
   Rust host.
 - Authentication, replication, transactions, change streams, TTL, backup, encryption, and the

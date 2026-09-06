@@ -1,5 +1,5 @@
 use anyhow::Result;
-use embedded_mongodb::{Cursor, bson::Document};
+use embedded_mongodb::{blocking::Cursor, bson::Document};
 use std::time::{Duration, Instant};
 
 pub struct Latency {

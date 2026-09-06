@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use embedded_mongodb::{
-    Client,
+    blocking::Client,
     bson::{doc, oid::ObjectId},
 };
 use serde::{Deserialize, Serialize};

@@ -1,5 +1,5 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use embedded_mongodb::{Client, bson::doc};
+use embedded_mongodb::{blocking::Client, bson::doc};
 use std::hint::black_box;
 use tempfile::TempDir;
 

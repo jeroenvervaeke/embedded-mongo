@@ -1,7 +1,7 @@
 // cargo run --release --example basic
 
 use anyhow::Result;
-use embedded_mongodb::{Client, bson::doc};
+use embedded_mongodb::{blocking::Client, bson::doc};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()

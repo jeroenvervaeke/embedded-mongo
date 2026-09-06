@@ -9,6 +9,10 @@ pub enum Error {
     Bson(#[from] bson::error::Error),
     #[error("embedded MongoDB client is closed")]
     Closed,
+    /// The async layer's first worker thread could not be spawned, so there is nothing to run
+    /// the open on. Only [`crate::Client::new`] and [`crate::Client::with_options`] raise it.
+    #[error("could not start an embedded MongoDB worker thread: {0}")]
+    EngineThread(std::io::Error),
     /// A free-disk floor that could not be applied and could not be put back either, so the
     /// engine is on floors nobody chose.
     ///

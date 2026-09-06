@@ -11,7 +11,13 @@
 
 extern "C" {
 
+/// One open database directory. At most one exists per process.
 struct embedded_mongodb_handle;
+
+/// One session on a handle -- the embedded equivalent of a connection. Commands run on a
+/// session, not on the handle, and two sessions run two commands in parallel. Open as many as
+/// there are threads that will drive them; every session must be closed before its handle is.
+struct embedded_mongodb_session;
 
 struct embedded_mongodb_buffer {
     std::uint8_t* data;
@@ -81,13 +87,37 @@ EMBEDDED_MONGODB_API int embedded_mongodb_open_with_options(
     embedded_mongodb_handle** handle,
     char** error) noexcept;
 
-EMBEDDED_MONGODB_API int embedded_mongodb_run_command(embedded_mongodb_handle* handle,
-                                                       const char* database,
-                                                       std::size_t database_len,
-                                                       const std::uint8_t* command,
-                                                       std::size_t command_len,
-                                                       embedded_mongodb_buffer* response,
-                                                       char** error) noexcept;
+/// Opens a session on `handle` -- one MongoDB client, the embedded equivalent of a
+/// connection. Cheap to hold and cheap to open; open one per thread that will run commands.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_open(embedded_mongodb_handle* handle,
+                                                        embedded_mongodb_session** session,
+                                                        char** error) noexcept;
+
+/// Runs a command on `session`. A session runs one command at a time -- it binds its own
+/// strand for the duration -- so it must not be called from two threads at once; two
+/// *different* sessions called at once is exactly how two commands run in parallel.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_run_command(embedded_mongodb_session* session,
+                                                               const char* database,
+                                                               std::size_t database_len,
+                                                               const std::uint8_t* command,
+                                                               std::size_t command_len,
+                                                               embedded_mongodb_buffer* response,
+                                                               char** error) noexcept;
+
+/// Interrupts whatever command `session` is running, if any, so that it returns an
+/// `Interrupted` error instead of running to completion. Safe to call from any thread, and
+/// concurrently with `embedded_mongodb_session_run_command` on the same session -- that is the
+/// point of it. A session that is between commands is left alone.
+///
+/// Interruption is cooperative: the operation stops at its next interrupt check rather than
+/// immediately, and a command that has already finished cannot be un-finished.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_kill(embedded_mongodb_session* session,
+                                                        char** error) noexcept;
+
+/// Closes `session`, releasing its client. Every session opened on a handle must be closed
+/// before `embedded_mongodb_close` is called on that handle.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_close(embedded_mongodb_session* session,
+                                                         char** error) noexcept;
 
 EMBEDDED_MONGODB_API int embedded_mongodb_close(embedded_mongodb_handle* handle,
                                                  char** error) noexcept;

@@ -3,7 +3,8 @@
 use super::{COLLECTION, child::result};
 use anyhow::{Context, Result};
 use embedded_mongodb::{
-    Database, Error,
+    Error,
+    blocking::Database,
     bson::{Bson, Document, doc},
 };
 use std::{fs, path::Path};
@@ -33,6 +34,7 @@ pub fn variant(error: &Error) -> &'static str {
     match error {
         Error::Bson(_) => "Bson",
         Error::Closed => "Closed",
+        Error::EngineThread(_) => "EngineThread",
         Error::FreeDiskFloorNotRestored { .. } => "FreeDiskFloorNotRestored",
         Error::InvalidArgument(_) => "InvalidArgument",
         Error::InvalidResponse(_) => "InvalidResponse",

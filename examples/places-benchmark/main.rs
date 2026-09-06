@@ -18,7 +18,7 @@ mod seed;
 
 use anyhow::{Context, Result};
 use datadir::footprint;
-use embedded_mongodb::Client;
+use embedded_mongodb::blocking::Client;
 use measure::{drain, latency, time};
 use report::{bytes, heading, latency_row, millis, row};
 use std::path::{Path, PathBuf};

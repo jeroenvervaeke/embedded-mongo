@@ -1,5 +1,5 @@
 use embedded_mongodb::{
-    Client, Collection,
+    blocking::{Client, Collection},
     bson::{Document, doc},
 };
 

@@ -1,13 +1,34 @@
 use crate::{
-    Database, Error, OpenOptions, ProcessLimits, Result, error::validate_response, limits, repair,
+    Error, OpenOptions, Result,
+    database::Database,
+    error::validate_response,
+    limits,
+    limits::ProcessLimits,
+    options,
+    pool::{CommandSlot, SessionPool},
+    repair,
 };
 use bson::Document;
 use embedded_mongodb_sys::Client as NativeClient;
 use std::path::Path;
 
 pub struct Client {
-    inner: NativeClient,
+    /// The sessions this client runs commands on, sized to
+    /// [`OpenOptions::command_strands`](crate::OpenOptions::command_strands). Held in a pool
+    /// because a `Client` is shared across threads and each session runs one command at a time:
+    /// a caller checks one out for the length of its command and hands it back. This is the
+    /// whole of the parallelism policy, and it is here, in Rust, rather than in the engine.
+    pool: SessionPool,
+    /// The runtime handle. Each session shares ownership of the engine with it, so the order in
+    /// which these two fields drop does not matter: the engine closes only once both the pool's
+    /// sessions and this handle are gone. [`close`](Client::close) still drops the pool first,
+    /// so that the handle is then the sole owner and the close can run eagerly and report.
+    runtime: NativeClient,
 }
+
+// Client is Send + Sync by composition -- SessionPool over Send sessions, and NativeClient,
+// which carries its own vetted unsafe impls -- so the compiler derives both, and will stop
+// deriving them if a field ever stops being thread-safe. No hand-written impl to go stale.
 
 impl Client {
     /// Opens the database directory at `path`, creating it if it is not there.
@@ -59,11 +80,15 @@ impl Client {
         // the fix and has to be scanned.
         let origin = repair::origin(path);
 
-        let inner = match options {
+        let runtime = match options {
             Some(options) => NativeClient::open_with_options(text, options.engine)?,
             None => NativeClient::open(text)?,
         };
-        let client = Self { inner };
+        // The pool is opened before anything runs a command, because everything does -- the
+        // floor below and the repair pass both go through the pool like any other caller.
+        let strands = options::OpenOptions::strand_count(options.as_ref());
+        let pool = SessionPool::open(&runtime, strands.count())?;
+        let client = Self { pool, runtime };
         // Before the repair pass, which creates indexes: a floor the caller lowered so that
         // index builds work on a full device has to be in force by the time this engine
         // builds one of its own.
@@ -136,12 +161,60 @@ impl Client {
 
     #[tracing::instrument(name = "embedded_mongodb.close", level = "debug", skip_all, err)]
     pub fn close(self) -> Result<()> {
-        self.inner.close().map_err(Error::from)
+        // The pool is dropped first so the runtime handle is then the engine's sole owner and
+        // the close below runs eagerly and reports its result. Safety does not rest on this
+        // order -- a session shares ownership of the engine, so the engine cannot close under
+        // one either way -- but a clean, error-reporting close does. `close` taking `self`
+        // guarantees no checkout is in flight.
+        drop(self.pool);
+        self.runtime.close().map_err(Error::from)
+    }
+
+    /// [`run_command`](Client::run_command) that the caller can abandon.
+    ///
+    /// Answers `None` when `slot` was cancelled before any session picked the command up, in
+    /// which case it never ran. Otherwise the command runs and `slot` can interrupt it until it
+    /// returns; see [`CommandSlot`].
+    ///
+    /// Not public: nothing in the blocking API can abandon a call it is blocked inside. It is
+    /// the async layer, whose caller can drop the future, that needs this.
+    pub(crate) fn run_command_cancellable(
+        &self,
+        slot: &CommandSlot,
+        database: &str,
+        command: &Document,
+    ) -> Option<Result<Document>> {
+        let encoded = match command.to_vec() {
+            Ok(encoded) => encoded,
+            Err(error) => return Some(Err(Error::from(error))),
+        };
+        let response = match self.pool.run(slot, database, &encoded)? {
+            Ok(response) => response,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(
+            Document::from_reader(response.as_slice())
+                .map_err(Error::from)
+                .and_then(validate_response),
+        )
+    }
+
+    /// [`run_command_bytes`](Client::run_command_bytes) that the caller can abandon, with the
+    /// same `None` meaning as [`run_command_cancellable`](Client::run_command_cancellable).
+    pub(crate) fn send_cancellable(
+        &self,
+        slot: &CommandSlot,
+        database: &str,
+        command: &[u8],
+    ) -> Option<Result<Vec<u8>>> {
+        self.pool.run(slot, database, command)
     }
 
     fn send(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
-        self.inner
-            .run_command(database, command)
-            .map_err(Error::from)
+        // A blocking caller is inside this call until it returns, so it has no way to abandon
+        // it: the slot is created and dropped here and never cancelled.
+        self.pool
+            .run(&CommandSlot::new(), database, command)
+            .expect("a slot nobody can cancel always runs its command")
     }
 }

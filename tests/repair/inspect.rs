@@ -5,7 +5,7 @@
 //! told them about itself.
 
 use embedded_mongodb::{
-    Client,
+    blocking::Client,
     bson::{Bson, Document, doc},
 };
 use std::collections::BTreeSet;

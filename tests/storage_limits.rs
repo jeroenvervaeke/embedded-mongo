@@ -11,8 +11,8 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, FreeDiskFloor, IndexBuildFloor, OpenOptions, QuerySpillingFloor, ReportedFloors,
-    bson::doc,
+    FreeDiskFloor, IndexBuildFloor, OpenOptions, QuerySpillingFloor, ReportedFloors,
+    blocking::Client, bson::doc,
 };
 
 /// Four tebibytes. Larger than the disk under any machine this runs on, so the check cannot

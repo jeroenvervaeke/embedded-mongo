@@ -5,6 +5,7 @@
 #include "engine_startup.h"
 
 #include "mongo/bson/bson_validate.h"
+#include "mongo/db/client.h"
 #include "mongo/db/dbdirectclient.h"
 #include "mongo/db/index_builds/index_builds_coordinator.h"
 #include "mongo/db/server_options.h"
@@ -60,10 +61,41 @@ Runtime::~Runtime() {
     cleanup(false);
 }
 
-std::vector<std::uint8_t> Runtime::runCommand(std::string_view database,
+void Runtime::close() {
+    cleanup(true);
+}
+
+Session::Session(Runtime& runtime) : _runtime(runtime) {
+    auto* serviceContext = _runtime.serviceContext();
+    uassert(13180006, "embedded MongoDB runtime is closed", serviceContext);
+    // Each session is a distinct client, so the engine sees N of them exactly as a server sees
+    // N connections. Made here, once, rather than per command: binding a client is cheap,
+    // creating one is not.
+    _strand = mongo::ClientStrand::make(
+        serviceContext->getService()->makeClient("embedded-mongodb-session", nullptr));
+}
+
+void Session::kill() const {
+    auto* serviceContext = _runtime.serviceContext();
+    if (!serviceContext) {
+        // The engine is closed, so nothing of this session's is running.
+        return;
+    }
+    // The lock has to span the read and the kill both: `Client::getOperationContext` documents
+    // that its answer may not be used once the Client is unlocked, and an operation that
+    // finished a moment ago has already detached itself and reads as null here. That is what
+    // makes this safe to call while the command it means to stop is finishing on its own.
+    mongo::ClientLock client(_strand->getClientPointer());
+    if (auto* opCtx = client->getOperationContext()) {
+        serviceContext->killOperation(client, opCtx, mongo::ErrorCodes::Interrupted);
+    }
+}
+
+std::vector<std::uint8_t> Session::runCommand(std::string_view database,
                                               const std::uint8_t* command,
                                               std::size_t commandLen) {
-    uassert(13180001, "embedded MongoDB runtime is closed", _serviceContext);
+    auto* serviceContext = _runtime.serviceContext();
+    uassert(13180001, "embedded MongoDB runtime is closed", serviceContext);
     uassert(13180002, "invalid database name", mongo::DatabaseName::validDBName(database));
     uassert(13180003, "BSON command is empty", command && commandLen);
     uassertStatusOK(mongo::validateBSON(reinterpret_cast<const char*>(command), commandLen));
@@ -73,8 +105,11 @@ std::vector<std::uint8_t> Runtime::runCommand(std::string_view database,
             "BSON command contains trailing bytes",
             static_cast<std::size_t>(commandObject.objsize()) == commandLen);
 
+    // This session's own strand, bound only here: a caller holds one session at a time, so
+    // this bind never contends, and two sessions binding their two strands is exactly how two
+    // commands come to run at once.
     auto clientGuard = _strand->bind();
-    auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
+    auto opCtx = serviceContext->makeOperationContext(clientGuard.get());
     mongo::DBDirectClient client(opCtx.get());
     auto request = mongo::OpMsgRequestBuilder::create(
         mongo::auth::ValidatedTenancyScope::kNotRequired,
@@ -85,10 +120,6 @@ std::vector<std::uint8_t> Runtime::runCommand(std::string_view database,
 
     const auto* begin = reinterpret_cast<const std::uint8_t*>(response.objdata());
     return {begin, begin + response.objsize()};
-}
-
-void Runtime::close() {
-    cleanup(true);
 }
 
 void Runtime::initialize(std::string path, const ResolvedOptions& options) {
@@ -104,9 +135,12 @@ void Runtime::initialize(std::string path, const ResolvedOptions& options) {
 
     installProcessServices(_serviceContext);
 
-    _strand = mongo::ClientStrand::make(
+    // The runtime's own strand, used only for the startup recovery below and for shutdown --
+    // never a command, which runs on a session's strand. It keeps the name the engine has
+    // always logged its lifecycle under.
+    _lifecycleStrand = mongo::ClientStrand::make(
         _serviceContext->getService()->makeClient("embedded-mongodb", nullptr));
-    auto clientGuard = _strand->bind();
+    auto clientGuard = _lifecycleStrand->bind();
 
     mongo::storageGlobalParams.dbpath = dbPath.string();
     mongo::storageGlobalParams.engine = "wiredTiger";
@@ -152,10 +186,10 @@ void Runtime::cleanup(bool reportFailure) {
     };
 
     if (_serviceContext) {
-        if (_indexBuildsStarted && _strand) {
+        if (_indexBuildsStarted && _lifecycleStrand) {
             _indexBuildsStarted = false;
             attempt([&] {
-                auto clientGuard = _strand->bind();
+                auto clientGuard = _lifecycleStrand->bind();
                 auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
                 mongo::IndexBuildsCoordinator::get(_serviceContext)->shutdown(opCtx.get());
             });
@@ -166,9 +200,9 @@ void Runtime::cleanup(bool reportFailure) {
             mongo::DatabaseShardingStateFactory::clear(_serviceContext);
         });
 
-        if (_storageStarted && _strand) {
+        if (_storageStarted && _lifecycleStrand) {
             attempt([&] {
-                auto clientGuard = _strand->bind();
+                auto clientGuard = _lifecycleStrand->bind();
                 auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
                 mongo::Lock::GlobalLock globalLock(opCtx.get(), mongo::MODE_X);
                 mongo::DatabaseHolder::get(opCtx.get())->closeAll(opCtx.get());
@@ -188,7 +222,7 @@ void Runtime::cleanup(bool reportFailure) {
             }
         });
 
-        _strand.reset();
+        _lifecycleStrand.reset();
         mongo::setGlobalServiceContext({});
         _serviceContext = nullptr;
     }
