@@ -1,4 +1,6 @@
 use crate::{EngineOptions, Error, Result, ffi};
+use std::cell::Cell;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// An open database directory. Runs no commands itself: open a [`Session`] and run commands on
@@ -40,16 +42,46 @@ unsafe impl Sync for Runtime {}
 ///
 /// It holds an [`Arc`] on the runtime, so it can neither run against nor be dropped after a
 /// freed engine -- the engine cannot close while the session is alive.
+///
+/// A [`Killer`] taken from it is the one thing about a session that *is* shareable: it
+/// interrupts whatever command the session is running, from any thread, while that command is
+/// still in flight.
 pub struct Session {
-    inner: cxx::UniquePtr<ffi::bridge::EmbeddedSession>,
+    inner: Arc<SessionInner>,
+    /// Keeps `Session` `Send` but not `Sync`. `run_command` binds a single strand, which two
+    /// threads calling at once would double-bind, so the compiler is made to reject sharing one
+    /// -- the invariant is not left to a comment. A `Cell` is the smallest type with exactly
+    /// that pair of properties.
+    _not_sync: PhantomData<Cell<()>>,
+}
+
+/// A session's interrupt capability, split off so it can be shared where the session cannot.
+///
+/// Cloneable, [`Send`] and [`Sync`]: [`kill`](Killer::kill) is safe from any thread and
+/// concurrently with the command it interrupts, because the native side does the whole read of
+/// the running operation and the kill under MongoDB's own Client lock. Holding one keeps the
+/// session -- and so the engine -- alive, so a killer can never fire into freed memory.
+#[derive(Clone)]
+pub struct Killer {
+    inner: Arc<SessionInner>,
+}
+
+/// The session's native handle, and the runtime reference that outlives it. Shared between a
+/// [`Session`] and every [`Killer`] taken from it.
+struct SessionInner {
+    session: cxx::UniquePtr<ffi::bridge::EmbeddedSession>,
     // Keeps the engine alive for as long as this session exists. Never read; its Drop is the
     // point of it.
     _runtime: Arc<Runtime>,
 }
 
-// SAFETY: a session may move to the worker thread that will drive it. It is deliberately not
-// Sync: run_command binds a single strand, which two threads calling at once would double-bind.
-unsafe impl Send for Session {}
+// SAFETY: a session may move to the worker thread that will drive it, and a Killer may be
+// shared with any thread that might cancel. Sharing is sound because the only method reachable
+// through a shared reference is `kill`, which the native side performs under the Client's own
+// lock; `run_command` is reachable only through `Session`, which is deliberately not `Sync`, so
+// at most one thread ever runs a command on a given session.
+unsafe impl Send for SessionInner {}
+unsafe impl Sync for SessionInner {}
 
 impl Runtime {
     fn open_session(&self) -> Result<cxx::UniquePtr<ffi::bridge::EmbeddedSession>> {
@@ -96,8 +128,11 @@ impl Client {
             return Err(Error::Closed);
         }
         Ok(Session {
-            inner,
-            _runtime: Arc::clone(&self.runtime),
+            inner: Arc::new(SessionInner {
+                session: inner,
+                _runtime: Arc::clone(&self.runtime),
+            }),
+            _not_sync: PhantomData,
         })
     }
 
@@ -116,9 +151,34 @@ impl Client {
 impl Session {
     pub fn run_command(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
         self.inner
+            .session
             .as_ref()
             .ok_or(Error::Closed)?
             .run_command(database, command)
+            .map_err(Error::from)
+    }
+
+    /// A handle that can interrupt this session's running command from another thread. Cheap:
+    /// it shares the session rather than opening anything.
+    pub fn killer(&self) -> Killer {
+        Killer {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Killer {
+    /// Interrupts the command the session is running, if it is running one, so that it fails
+    /// with an `Interrupted` error rather than finishing. A session between commands is left
+    /// alone, which is what makes this safe to call while a command is finishing on its own.
+    ///
+    /// Interruption is cooperative: the engine stops at its next interrupt check.
+    pub fn kill(&self) -> Result<()> {
+        self.inner
+            .session
+            .as_ref()
+            .ok_or(Error::Closed)?
+            .kill()
             .map_err(Error::from)
     }
 }

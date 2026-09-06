@@ -35,6 +35,7 @@ pub(crate) mod bridge {
         ) -> Result<UniquePtr<EmbeddedMongo>>;
         fn open_session(self: &EmbeddedMongo) -> Result<UniquePtr<EmbeddedSession>>;
         fn run_command(self: &EmbeddedSession, database: &str, command: &[u8]) -> Result<Vec<u8>>;
+        fn kill(self: &EmbeddedSession) -> Result<()>;
         fn close(self: Pin<&mut EmbeddedMongo>) -> Result<()>;
     }
 }

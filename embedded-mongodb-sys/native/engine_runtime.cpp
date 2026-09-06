@@ -5,6 +5,7 @@
 #include "engine_startup.h"
 
 #include "mongo/bson/bson_validate.h"
+#include "mongo/db/client.h"
 #include "mongo/db/dbdirectclient.h"
 #include "mongo/db/index_builds/index_builds_coordinator.h"
 #include "mongo/db/server_options.h"
@@ -72,6 +73,22 @@ Session::Session(Runtime& runtime) : _runtime(runtime) {
     // creating one is not.
     _strand = mongo::ClientStrand::make(
         serviceContext->getService()->makeClient("embedded-mongodb-session", nullptr));
+}
+
+void Session::kill() const {
+    auto* serviceContext = _runtime.serviceContext();
+    if (!serviceContext) {
+        // The engine is closed, so nothing of this session's is running.
+        return;
+    }
+    // The lock has to span the read and the kill both: `Client::getOperationContext` documents
+    // that its answer may not be used once the Client is unlocked, and an operation that
+    // finished a moment ago has already detached itself and reads as null here. That is what
+    // makes this safe to call while the command it means to stop is finishing on its own.
+    mongo::ClientLock client(_strand->getClientPointer());
+    if (auto* opCtx = client->getOperationContext()) {
+        serviceContext->killOperation(client, opCtx, mongo::ErrorCodes::Interrupted);
+    }
 }
 
 std::vector<std::uint8_t> Session::runCommand(std::string_view database,

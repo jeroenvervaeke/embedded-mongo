@@ -45,6 +45,10 @@ public:
     rust::Vec<std::uint8_t> run_command(
         rust::Str database, rust::Slice<const std::uint8_t> command) const;
 
+    /// Interrupts the command this session is running, if any. Unlike `run_command`, safe to
+    /// call from another thread while that command is in flight.
+    void kill() const;
+
 private:
     friend class EmbeddedMongo;
 

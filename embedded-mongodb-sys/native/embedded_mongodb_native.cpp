@@ -157,6 +157,15 @@ int embedded_mongodb_session_run_command(embedded_mongodb_session* session,
     });
 }
 
+int embedded_mongodb_session_kill(embedded_mongodb_session* session, char** error) noexcept {
+    return translateErrors(error, [&] {
+        if (!session) {
+            throw std::invalid_argument("session is required");
+        }
+        session->session.kill();
+    });
+}
+
 int embedded_mongodb_session_close(embedded_mongodb_session* session, char** error) noexcept {
     return translateErrors(error, [&] {
         // Dropping the session releases its client and its share in the runtime. Nothing here

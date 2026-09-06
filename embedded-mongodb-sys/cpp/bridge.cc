@@ -99,6 +99,17 @@ EmbeddedSession::~EmbeddedSession() {
     embedded_mongodb_free(error);
 }
 
+void EmbeddedSession::kill() const {
+    if (!session_) {
+        // Closed sessions run nothing, so there is nothing to interrupt.
+        return;
+    }
+
+    char* error = nullptr;
+    const auto status = embedded_mongodb_session_kill(session_, &error);
+    throw_if_error(status, error);
+}
+
 rust::Vec<std::uint8_t> EmbeddedSession::run_command(
     rust::Str database, rust::Slice<const std::uint8_t> command) const {
     if (!session_) {

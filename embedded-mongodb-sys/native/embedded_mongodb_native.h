@@ -104,6 +104,16 @@ EMBEDDED_MONGODB_API int embedded_mongodb_session_run_command(embedded_mongodb_s
                                                                embedded_mongodb_buffer* response,
                                                                char** error) noexcept;
 
+/// Interrupts whatever command `session` is running, if any, so that it returns an
+/// `Interrupted` error instead of running to completion. Safe to call from any thread, and
+/// concurrently with `embedded_mongodb_session_run_command` on the same session -- that is the
+/// point of it. A session that is between commands is left alone.
+///
+/// Interruption is cooperative: the operation stops at its next interrupt check rather than
+/// immediately, and a command that has already finished cannot be un-finished.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_kill(embedded_mongodb_session* session,
+                                                        char** error) noexcept;
+
 /// Closes `session`, releasing its client. Every session opened on a handle must be closed
 /// before `embedded_mongodb_close` is called on that handle.
 EMBEDDED_MONGODB_API int embedded_mongodb_session_close(embedded_mongodb_session* session,

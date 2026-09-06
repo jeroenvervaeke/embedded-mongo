@@ -85,6 +85,17 @@ public:
                                          const std::uint8_t* command,
                                          std::size_t commandLen);
 
+    /// Interrupts the command this session is running, if it is running one.
+    ///
+    /// Callable from any thread, and the only method here that is: it takes the session's
+    /// Client lock, which is what MongoDB's own `killOp` takes, and reads and kills the
+    /// operation under it. A session between commands has no operation attached and this does
+    /// nothing. Interruption is cooperative -- the operation stops at its next interrupt check
+    /// -- so this asks, promptly, rather than tears anything down.
+    ///
+    /// Const because it changes nothing here: the state it touches belongs to the Client.
+    void kill() const;
+
 private:
     Runtime& _runtime;
     mongo::ClientStrandPtr _strand;
