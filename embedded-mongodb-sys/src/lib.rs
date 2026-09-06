@@ -3,9 +3,8 @@ mod error;
 mod ffi;
 mod options;
 
-pub use client::Client;
+pub use client::{Client, Session};
 pub use error::{Error, Result};
 pub use options::{
-    CacheSize, CommandStrands, EngineOptions, JournalFileSize, OutOfRange, Preallocation,
-    check_range,
+    CacheSize, EngineOptions, JournalFileSize, OutOfRange, Preallocation, check_range,
 };

@@ -38,7 +38,9 @@ impl Engine {
     /// longest block this crate ever does, which is why it happens on the worker rather than
     /// on the runtime the caller is awaiting from.
     pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<Self> {
-        let workers = OpenOptions::worker_count(options.as_ref());
+        // One worker per session in the blocking client's pool: each worker holds exactly one
+        // session for the length of a command, so this many run in parallel and none waits.
+        let workers = OpenOptions::strand_count(options.as_ref());
         let (jobs, queue) = mpsc::channel();
         let queue = Arc::new(Mutex::new(queue));
         let (ready, opened) = oneshot::channel();
@@ -56,34 +58,39 @@ impl Engine {
                         return;
                     }
                 };
-                // A caller that dropped the opening future has no way left to reach the
-                // engine, so there is nothing to serve: returning here drops the only handle
-                // and the native destructor closes what was just opened.
-                if ready.send(Ok(())).is_err() {
-                    return;
-                }
+                // This thread is the first worker; the rest are spawned here. Count the ones
+                // that actually start, because `close` retires exactly this many -- a worker
+                // that failed to spawn must not be one the shutdown waits for.
+                let mut started = 1u32;
                 for index in 1..workers {
                     let client = Arc::clone(&client);
                     let queue = Arc::clone(&queue);
-                    if let Err(error) = std::thread::Builder::new()
+                    match std::thread::Builder::new()
                         .name(format!("embedded-mongodb-{index}"))
                         .spawn(move || serve(client, queue))
                     {
+                        Ok(_) => started += 1,
                         // A pool short a worker still runs every command, just with less
                         // parallelism -- not worth failing an engine that is already open.
-                        // `close` counts workers, so the miss is recorded there too.
-                        tracing::warn!(
+                        Err(error) => tracing::warn!(
                             target: "embedded_mongodb",
                             error = %error,
                             "an engine worker thread could not be started"
-                        );
+                        ),
                     }
+                }
+                // Sent after the spawns so the count is the real one. A caller that dropped the
+                // opening future has no way left to reach the engine: returning drops this
+                // thread's handle, the helper threads find the job queue's sender gone and exit,
+                // and the last handle out closes what was just opened.
+                if ready.send(Ok(started)).is_err() {
+                    return;
                 }
                 serve(client, queue);
             })
             .map_err(Error::EngineThread)?;
 
-        opened.await.map_err(|_| Error::Closed)??;
+        let workers = opened.await.map_err(|_| Error::Closed)??;
         Ok(Self { jobs, workers })
     }
 

@@ -4,10 +4,9 @@
 
 #include "mongo/db/client_strand.h"
 
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +22,12 @@ namespace embedded_mongodb {
 /// At most one may exist per process: MongoDB reaches its storage engine, its catalog and its
 /// options through process-wide globals, so a second directory would be opened over the first.
 /// The constructor throws rather than allowing that.
+///
+/// It runs no commands itself. A command needs a `mongo::Client` -- what a connection is to a
+/// server -- and those are handed out as [`Session`]s, each with its own client, so that two
+/// sessions run in parallel and contend only where mongod's own connections do. The one strand
+/// the runtime keeps is for its own lifecycle -- startup recovery and shutdown -- which are
+/// single-threaded by construction and never overlap a command.
 class Runtime {
 public:
     Runtime(std::string path, const ResolvedOptions& options);
@@ -31,38 +36,58 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    std::vector<std::uint8_t> runCommand(std::string_view database,
-                                         const std::uint8_t* command,
-                                         std::size_t commandLen);
+    /// The service every session makes its client from, or null once the runtime is closed.
+    /// A session reads this before it binds anything, so a command on a closed runtime is a
+    /// named error rather than a use of a torn-down engine.
+    mongo::ServiceContext* serviceContext() const { return _serviceContext; }
 
     /// Shuts the engine down and reports what failed on the way. The destructor does the same
     /// work silently, so a caller who does not want to hear about it can simply drop this.
+    ///
+    /// Every session opened on this runtime must be gone before this runs. Sessions hold a
+    /// shared reference to the runtime, so the object cannot be freed under them; but this
+    /// tears the engine down, and a session that outlived it would hold a client of a service
+    /// that no longer exists. The safe Rust layer drops its sessions before it closes.
     void close();
 
 private:
     void initialize(std::string path, const ResolvedOptions& options);
     void cleanup(bool reportFailure);
 
-    /// Takes a strand out of the pool, waiting for one when every strand is running a
-    /// command. Pairs with `releaseStrand`; `runCommand` is the only caller of either --
-    /// startup and shutdown use `_strands.front()` directly, before commands can arrive and
-    /// after the caller's exclusive access says none are left.
-    std::size_t acquireStrand();
-    void releaseStrand(std::size_t index);
-
     mongo::ServiceContext* _serviceContext = nullptr;
-    /// One strand per command that may run in parallel: each wraps its own `mongo::Client`,
-    /// which is what a connection is to a server, so commands on different strands contend
-    /// only where mongod's own sessions do -- in the lock manager and the storage engine.
-    /// Sized once at open from `ResolvedOptions::commandStrands`.
-    std::vector<mongo::ClientStrandPtr> _strands;
-    std::mutex _poolMutex;
-    std::condition_variable _strandReturned;
-    /// Indices into `_strands` not currently bound to a command.
-    std::vector<std::size_t> _freeStrands;
+    /// The runtime's own strand, for startup recovery and shutdown only -- never a command.
+    /// Commands run on a session's strand instead.
+    mongo::ClientStrandPtr _lifecycleStrand;
     bool _storageStarted = false;
     bool _indexBuildsStarted = false;
     bool _ownsActiveRuntime = false;
+};
+
+/// One `mongo::Client` on an open [`Runtime`] -- the embedded equivalent of a connection.
+///
+/// A session binds its own strand for the length of each command, so N sessions run N commands
+/// at once with no coordination of their own: the parallelism, and the serialization of one
+/// session's successive commands, are both the strand's doing. Deciding how many sessions to
+/// open, and handing them out, is the caller's job -- there is no pool here, because a pool is
+/// policy and belongs in the Rust layer that has a checked language to write it in.
+///
+/// A session keeps its runtime alive by holding a shared reference to it, so it can never bind
+/// a client of a runtime that has been freed. It must still be destroyed before the runtime is
+/// *closed*: see [`Runtime::close`].
+class Session {
+public:
+    explicit Session(std::shared_ptr<Runtime> runtime);
+
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+
+    std::vector<std::uint8_t> runCommand(std::string_view database,
+                                         const std::uint8_t* command,
+                                         std::size_t commandLen);
+
+private:
+    std::shared_ptr<Runtime> _runtime;
+    mongo::ClientStrandPtr _strand;
 };
 
 }  // namespace embedded_mongodb

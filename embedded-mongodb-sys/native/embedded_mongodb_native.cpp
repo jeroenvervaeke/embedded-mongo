@@ -71,9 +71,18 @@ int translateErrors(char** error, Function&& function) noexcept {
 struct embedded_mongodb_handle {
     embedded_mongodb_handle(std::string path,
                             const embedded_mongodb::ResolvedOptions& options)
-        : runtime(std::move(path), options) {}
+        : runtime(std::make_shared<embedded_mongodb::Runtime>(std::move(path), options)) {}
 
-    embedded_mongodb::Runtime runtime;
+    // Shared so a session cannot outlive the runtime object it holds a client of. Closing the
+    // handle still tears the engine down; the shared pointer only rules out a dangling one.
+    std::shared_ptr<embedded_mongodb::Runtime> runtime;
+};
+
+struct embedded_mongodb_session {
+    explicit embedded_mongodb_session(std::shared_ptr<embedded_mongodb::Runtime> runtime)
+        : session(std::move(runtime)) {}
+
+    embedded_mongodb::Session session;
 };
 
 extern "C" {
@@ -110,22 +119,34 @@ int embedded_mongodb_open_with_options(const char* path,
     });
 }
 
-int embedded_mongodb_run_command(embedded_mongodb_handle* handle,
-                                  const char* database,
-                                  std::size_t databaseLen,
-                                  const std::uint8_t* command,
-                                  std::size_t commandLen,
-                                  embedded_mongodb_buffer* response,
+int embedded_mongodb_session_open(embedded_mongodb_handle* handle,
+                                  embedded_mongodb_session** session,
                                   char** error) noexcept {
     return translateErrors(error, [&] {
-        if (!handle || !database || !response) {
-            throw std::invalid_argument("handle, database, and response are required");
+        if (!handle || !session) {
+            throw std::invalid_argument("handle and session are required");
+        }
+        *session = nullptr;
+        *session = new embedded_mongodb_session(handle->runtime);
+    });
+}
+
+int embedded_mongodb_session_run_command(embedded_mongodb_session* session,
+                                         const char* database,
+                                         std::size_t databaseLen,
+                                         const std::uint8_t* command,
+                                         std::size_t commandLen,
+                                         embedded_mongodb_buffer* response,
+                                         char** error) noexcept {
+    return translateErrors(error, [&] {
+        if (!session || !database || !response) {
+            throw std::invalid_argument("session, database, and response are required");
         }
 
         response->data = nullptr;
         response->len = 0;
-        auto bytes =
-            handle->runtime.runCommand(std::string_view(database, databaseLen), command, commandLen);
+        auto bytes = session->session.runCommand(
+            std::string_view(database, databaseLen), command, commandLen);
         auto* copy = static_cast<std::uint8_t*>(std::malloc(bytes.size()));
         if (!copy) {
             throw std::bad_alloc();
@@ -136,11 +157,19 @@ int embedded_mongodb_run_command(embedded_mongodb_handle* handle,
     });
 }
 
+int embedded_mongodb_session_close(embedded_mongodb_session* session, char** error) noexcept {
+    return translateErrors(error, [&] {
+        // Dropping the session releases its client and its share in the runtime. Nothing here
+        // tears the engine down; the last handle does that.
+        std::unique_ptr<embedded_mongodb_session> owner(session);
+    });
+}
+
 int embedded_mongodb_close(embedded_mongodb_handle* handle, char** error) noexcept {
     return translateErrors(error, [&] {
         std::unique_ptr<embedded_mongodb_handle> owner(handle);
-        if (owner) {
-            owner->runtime.close();
+        if (owner && owner->runtime) {
+            owner->runtime->close();
         }
     });
 }

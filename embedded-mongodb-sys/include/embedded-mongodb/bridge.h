@@ -9,7 +9,10 @@
 namespace embedded_mongodb {
 
 struct NativeOpenOptions;
+class EmbeddedSession;
 
+/// The runtime handle: one open database directory. It runs no commands itself -- open a
+/// session and run commands on that.
 class EmbeddedMongo {
 public:
     ~EmbeddedMongo();
@@ -17,8 +20,9 @@ public:
     EmbeddedMongo(const EmbeddedMongo&) = delete;
     EmbeddedMongo& operator=(const EmbeddedMongo&) = delete;
 
-    rust::Vec<std::uint8_t> run_command(
-        rust::Str database, rust::Slice<const std::uint8_t> command) const;
+    /// One client on this runtime -- the embedded equivalent of a connection. Two sessions run
+    /// two commands in parallel.
+    std::unique_ptr<EmbeddedSession> open_session() const;
     void close();
 
 private:
@@ -28,6 +32,25 @@ private:
     explicit EmbeddedMongo(embedded_mongodb_handle* handle) noexcept;
 
     embedded_mongodb_handle* handle_;
+};
+
+/// One session on an [`EmbeddedMongo`]. Runs one command at a time; dropping it closes it.
+class EmbeddedSession {
+public:
+    ~EmbeddedSession();
+
+    EmbeddedSession(const EmbeddedSession&) = delete;
+    EmbeddedSession& operator=(const EmbeddedSession&) = delete;
+
+    rust::Vec<std::uint8_t> run_command(
+        rust::Str database, rust::Slice<const std::uint8_t> command) const;
+
+private:
+    friend class EmbeddedMongo;
+
+    explicit EmbeddedSession(embedded_mongodb_session* session) noexcept;
+
+    embedded_mongodb_session* session_;
 };
 
 std::unique_ptr<EmbeddedMongo> open(rust::Str path);

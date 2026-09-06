@@ -31,7 +31,7 @@ process.**
   - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
   - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Thread-safe access** — share one client across threads while commands are safely serialized.
+- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of sessions, up to a configurable count.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
 ## Deployment model

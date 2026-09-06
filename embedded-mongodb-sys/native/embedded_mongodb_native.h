@@ -11,7 +11,13 @@
 
 extern "C" {
 
+/// One open database directory. At most one exists per process.
 struct embedded_mongodb_handle;
+
+/// One session on a handle -- the embedded equivalent of a connection. Commands run on a
+/// session, not on the handle, and two sessions run two commands in parallel. Open as many as
+/// there are threads that will drive them; every session must be closed before its handle is.
+struct embedded_mongodb_session;
 
 struct embedded_mongodb_buffer {
     std::uint8_t* data;
@@ -51,13 +57,6 @@ struct embedded_mongodb_open_options {
     std::uint32_t journal_file_max_kb;
     /// One of embedded_mongodb_journal_prealloc.
     std::uint32_t journal_prealloc;
-    /// How many commands may execute in parallel. Each is a MongoDB Client -- what a
-    /// connection would be on a server -- so this is the embedded equivalent of a connection
-    /// count: commands beyond it wait for one to come free rather than failing. Sized at
-    /// open because the pool is part of the runtime this library keeps for the life of the
-    /// handle; it is a count of sessions, not of threads -- a command still executes on the
-    /// thread that called `embedded_mongodb_run_command`.
-    std::uint32_t command_strands;
 };
 
 typedef void (*embedded_mongodb_log_callback)(std::int32_t severity,
@@ -88,13 +87,27 @@ EMBEDDED_MONGODB_API int embedded_mongodb_open_with_options(
     embedded_mongodb_handle** handle,
     char** error) noexcept;
 
-EMBEDDED_MONGODB_API int embedded_mongodb_run_command(embedded_mongodb_handle* handle,
-                                                       const char* database,
-                                                       std::size_t database_len,
-                                                       const std::uint8_t* command,
-                                                       std::size_t command_len,
-                                                       embedded_mongodb_buffer* response,
-                                                       char** error) noexcept;
+/// Opens a session on `handle` -- one MongoDB client, the embedded equivalent of a
+/// connection. Cheap to hold and cheap to open; open one per thread that will run commands.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_open(embedded_mongodb_handle* handle,
+                                                        embedded_mongodb_session** session,
+                                                        char** error) noexcept;
+
+/// Runs a command on `session`. A session runs one command at a time -- it binds its own
+/// strand for the duration -- so it must not be called from two threads at once; two
+/// *different* sessions called at once is exactly how two commands run in parallel.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_run_command(embedded_mongodb_session* session,
+                                                               const char* database,
+                                                               std::size_t database_len,
+                                                               const std::uint8_t* command,
+                                                               std::size_t command_len,
+                                                               embedded_mongodb_buffer* response,
+                                                               char** error) noexcept;
+
+/// Closes `session`, releasing its client. Every session opened on a handle must be closed
+/// before `embedded_mongodb_close` is called on that handle.
+EMBEDDED_MONGODB_API int embedded_mongodb_session_close(embedded_mongodb_session* session,
+                                                         char** error) noexcept;
 
 EMBEDDED_MONGODB_API int embedded_mongodb_close(embedded_mongodb_handle* handle,
                                                  char** error) noexcept;

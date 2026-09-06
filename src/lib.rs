@@ -20,15 +20,14 @@ mod repair;
 
 pub use bson;
 // The limits the native library validates, re-exported rather than redefined: a second copy
-// here would be a second place for the engine's bounds to be written down.
-pub use embedded_mongodb_sys::{
-    CacheSize, CommandStrands, JournalFileSize, OutOfRange, Preallocation,
-};
+// here would be a second place for the engine's bounds to be written down. CommandStrands is
+// not among them -- it is this crate's own pool size, defined in `options`.
+pub use embedded_mongodb_sys::{CacheSize, JournalFileSize, OutOfRange, Preallocation};
 pub use error::{Error, Result};
 pub use insert::{InsertManyResult, InsertOneResult};
 pub use limits::{FreeDiskFloor, IndexBuildFloor, QuerySpillingFloor, ReportedFloors};
 pub use nonblocking::{Client, Collection, Cursor, Database, ProcessLimits};
-pub use options::OpenOptions;
+pub use options::{CommandStrands, OpenOptions};
 
 /// The synchronous API: every type here works exactly as its crate-root namesake does, minus
 /// the worker threads -- a call occupies the calling thread for the length of the command.

@@ -14,7 +14,6 @@ struct ResolvedOptions {
     std::uint32_t cacheSizeMB;
     std::uint32_t journalFileMaxKB;
     bool journalPrealloc;
-    std::uint32_t commandStrands;
 
     /// The `wiredtiger_open` fragment that carries the journal settings, comma-terminated so
     /// that whatever MongoDB appends after it stays a separate configuration entry.

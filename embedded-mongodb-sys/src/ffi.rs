@@ -9,8 +9,6 @@ pub(crate) mod bridge {
         journal_file_max_kb: u32,
         /// An `embedded_mongodb_journal_prealloc`; see `crate::Preallocation`.
         journal_prealloc: u32,
-        /// How many commands may run in parallel; see `crate::CommandStrands`.
-        command_strands: u32,
     }
 
     extern "Rust" {
@@ -28,13 +26,15 @@ pub(crate) mod bridge {
         include!("embedded-mongodb/bridge.h");
 
         type EmbeddedMongo;
+        type EmbeddedSession;
 
         fn open(path: &str) -> Result<UniquePtr<EmbeddedMongo>>;
         fn open_with_options(
             path: &str,
             options: &NativeOpenOptions,
         ) -> Result<UniquePtr<EmbeddedMongo>>;
-        fn run_command(self: &EmbeddedMongo, database: &str, command: &[u8]) -> Result<Vec<u8>>;
+        fn open_session(self: &EmbeddedMongo) -> Result<UniquePtr<EmbeddedSession>>;
+        fn run_command(self: &EmbeddedSession, database: &str, command: &[u8]) -> Result<Vec<u8>>;
         fn close(self: Pin<&mut EmbeddedMongo>) -> Result<()>;
     }
 }

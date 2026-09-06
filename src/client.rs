@@ -1,14 +1,32 @@
 use crate::{
     Error, OpenOptions, Result, database::Database, error::validate_response, limits,
-    limits::ProcessLimits, repair,
+    limits::ProcessLimits, options, repair,
 };
 use bson::Document;
-use embedded_mongodb_sys::Client as NativeClient;
+use embedded_mongodb_sys::{Client as NativeClient, Session as NativeSession};
 use std::path::Path;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 pub struct Client {
-    inner: NativeClient,
+    /// The sessions this client runs commands on, sized to
+    /// [`OpenOptions::command_strands`](crate::OpenOptions::command_strands). Held in a pool
+    /// because a `Client` is shared across threads and each session runs one command at a time:
+    /// a caller checks one out for the length of its command and hands it back. This is the
+    /// whole of the parallelism policy, and it is here, in Rust, rather than in the engine.
+    ///
+    /// Declared before `runtime` on purpose: a `Client` dropped without an explicit
+    /// [`close`](Client::close) drops its fields in this order, and every session must be gone
+    /// before the runtime that owns their engine is torn down. `close` drops the pool first for
+    /// the same reason.
+    pool: SessionPool,
+    /// The runtime handle, closed after the pool so no session outlives the engine.
+    runtime: NativeClient,
 }
+
+// SAFETY: NativeClient is Send + Sync; the pool guards its sessions behind a mutex and hands
+// each to one thread at a time, which is what NativeSession (Send, not Sync) requires.
+unsafe impl Send for Client {}
+unsafe impl Sync for Client {}
 
 impl Client {
     /// Opens the database directory at `path`, creating it if it is not there.
@@ -60,11 +78,15 @@ impl Client {
         // the fix and has to be scanned.
         let origin = repair::origin(path);
 
-        let inner = match options {
+        let runtime = match options {
             Some(options) => NativeClient::open_with_options(text, options.engine)?,
             None => NativeClient::open(text)?,
         };
-        let client = Self { inner };
+        // The pool is opened before anything runs a command, because everything does -- the
+        // floor below and the repair pass both go through the pool like any other caller.
+        let strands = options::OpenOptions::strand_count(options.as_ref());
+        let pool = SessionPool::open(&runtime, strands)?;
+        let client = Self { pool, runtime };
         // Before the repair pass, which creates indexes: a floor the caller lowered so that
         // index builds work on a full device has to be in force by the time this engine
         // builds one of its own.
@@ -137,12 +159,97 @@ impl Client {
 
     #[tracing::instrument(name = "embedded_mongodb.close", level = "debug", skip_all, err)]
     pub fn close(self) -> Result<()> {
-        self.inner.close().map_err(Error::from)
+        // Every session dropped before the runtime is closed: the pool is torn down here,
+        // while `self` still owns it, so no session can outlive the engine it holds a client
+        // of. `close` taking `self` is what guarantees no checkout is in flight.
+        drop(self.pool);
+        self.runtime.close().map_err(Error::from)
     }
 
     fn send(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
-        self.inner
-            .run_command(database, command)
-            .map_err(Error::from)
+        let session = self.pool.checkout();
+        session.run_command(database, command).map_err(Error::from)
     }
+}
+
+/// The sessions a [`Client`] runs commands on, and the checkout that hands them out one to a
+/// thread.
+///
+/// A plain mutex-guarded free list with a condition variable: a caller takes a session, runs
+/// its command with the pool unlocked, and returns it. Callers past the pool wait here for one
+/// to come back rather than failing -- the pool bounds how many commands run at once, not how
+/// many may be asked for. This is the safe-Rust counterpart of what a lock in the engine would
+/// otherwise be, and it is here so that it can be read, tested and changed without touching the
+/// native library.
+struct SessionPool {
+    idle: Mutex<Vec<NativeSession>>,
+    returned: Condvar,
+}
+
+impl SessionPool {
+    fn open(runtime: &NativeClient, strands: u32) -> Result<Self> {
+        let mut idle = Vec::with_capacity(strands as usize);
+        for _ in 0..strands {
+            idle.push(runtime.open_session()?);
+        }
+        Ok(Self {
+            idle: Mutex::new(idle),
+            returned: Condvar::new(),
+        })
+    }
+
+    /// Takes a session, waiting while every one is running a command. The returned guard hands
+    /// the session back on drop.
+    fn checkout(&self) -> Checkout<'_> {
+        let mut idle = lock(&self.idle);
+        while idle.is_empty() {
+            idle = self
+                .returned
+                .wait(idle)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        let session = idle.pop().expect("waited until a session was free");
+        Checkout {
+            pool: self,
+            session: Some(session),
+        }
+    }
+}
+
+/// A session on loan from the pool. Runs one command -- the only thing a borrowed session is
+/// for -- and returns to the pool when dropped.
+struct Checkout<'pool> {
+    pool: &'pool SessionPool,
+    session: Option<NativeSession>,
+}
+
+impl Checkout<'_> {
+    fn run_command(
+        &self,
+        database: &str,
+        command: &[u8],
+    ) -> std::result::Result<Vec<u8>, embedded_mongodb_sys::Error> {
+        // The pool is unlocked for the whole command, so other threads run theirs on other
+        // sessions meanwhile -- which is the parallelism the pool exists to allow.
+        self.session
+            .as_ref()
+            .expect("a checked-out session is present until it is returned")
+            .run_command(database, command)
+    }
+}
+
+impl Drop for Checkout<'_> {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take() {
+            lock(&self.pool.idle).push(session);
+            self.pool.returned.notify_one();
+        }
+    }
+}
+
+/// The pool's mutex guards a plain list; a panic under it leaves that list sound, and refusing
+/// it would strand every other caller waiting on the pool. So the poison is shrugged off, as
+/// `limits::process` does with its own.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

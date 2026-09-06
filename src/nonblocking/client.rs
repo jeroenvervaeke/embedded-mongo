@@ -7,10 +7,11 @@ use std::path::Path;
 /// directory format, same one-runtime-per-process rule, with every command dispatched to a
 /// worker thread so an `await` parks a task rather than a runtime thread.
 ///
-/// Commands run in parallel up to the engine's strand count --
-/// [`OpenOptions::command_strands`], eight unless asked otherwise -- because the pool keeps
-/// one worker per strand. A `Client` is `Send + Sync` and futures from different tasks
-/// proceed independently; what they contend on is what mongod's own sessions contend on.
+/// Commands run in parallel up to the session-pool size --
+/// [`OpenOptions::command_strands`], eight unless asked otherwise -- because there is one
+/// worker thread per session, each holding its session for the length of a command. A `Client`
+/// is `Send + Sync` and futures from different tasks proceed independently; what they contend
+/// on is what mongod's own sessions contend on.
 pub struct Client {
     engine: Engine,
 }
@@ -27,9 +28,9 @@ impl Client {
     }
 
     /// [`Client::new`] with the engine's storage limits overridden; see
-    /// [`blocking::Client::with_options`](crate::blocking::Client::with_options). The one
-    /// option with no blocking counterpart in effect is [`OpenOptions::command_strands`],
-    /// which here also sizes the worker pool.
+    /// [`blocking::Client::with_options`](crate::blocking::Client::with_options).
+    /// [`OpenOptions::command_strands`] sizes the session pool for both, and here also the
+    /// worker threads that drive it -- one per session.
     pub async fn with_options(path: impl AsRef<Path>, options: OpenOptions) -> Result<Self> {
         Self::open(path, Some(options)).await
     }
