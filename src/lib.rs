@@ -16,6 +16,7 @@ mod insert;
 mod limits;
 mod nonblocking;
 mod options;
+mod pool;
 mod repair;
 
 pub use bson;

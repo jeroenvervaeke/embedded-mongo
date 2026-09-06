@@ -1,11 +1,16 @@
 use crate::{
-    CommandStrands, Error, OpenOptions, Result, database::Database, error::validate_response,
-    limits, limits::ProcessLimits, options, repair,
+    Error, OpenOptions, Result,
+    database::Database,
+    error::validate_response,
+    limits,
+    limits::ProcessLimits,
+    options,
+    pool::{CommandSlot, SessionPool},
+    repair,
 };
 use bson::Document;
-use embedded_mongodb_sys::{Client as NativeClient, Session as NativeSession};
+use embedded_mongodb_sys::Client as NativeClient;
 use std::path::Path;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 pub struct Client {
     /// The sessions this client runs commands on, sized to
@@ -82,7 +87,7 @@ impl Client {
         // The pool is opened before anything runs a command, because everything does -- the
         // floor below and the repair pass both go through the pool like any other caller.
         let strands = options::OpenOptions::strand_count(options.as_ref());
-        let pool = SessionPool::open(&runtime, strands)?;
+        let pool = SessionPool::open(&runtime, strands.count())?;
         let client = Self { pool, runtime };
         // Before the repair pass, which creates indexes: a floor the caller lowered so that
         // index builds work on a full device has to be in force by the time this engine
@@ -165,95 +170,51 @@ impl Client {
         self.runtime.close().map_err(Error::from)
     }
 
-    fn send(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
-        let session = self.pool.checkout();
-        session.run_command(database, command).map_err(Error::from)
-    }
-}
-
-/// The sessions a [`Client`] runs commands on, and the checkout that hands them out one to a
-/// thread.
-///
-/// A plain mutex-guarded free list with a condition variable: a caller takes a session, runs
-/// its command with the pool unlocked, and returns it. Callers past the pool wait here for one
-/// to come back rather than failing -- the pool bounds how many commands run at once, not how
-/// many may be asked for. This is the safe-Rust counterpart of what a lock in the engine would
-/// otherwise be, and it is here so that it can be read, tested and changed without touching the
-/// native library.
-struct SessionPool {
-    idle: Mutex<Vec<NativeSession>>,
-    returned: Condvar,
-}
-
-impl SessionPool {
-    /// Takes a [`CommandStrands`] rather than a bare count: the pool must hold at least one
-    /// session or [`checkout`](SessionPool::checkout) would wait forever, and that "at least
-    /// one" is exactly what the newtype guarantees. The invariant reaches the loop as a type,
-    /// not as an unchecked number.
-    fn open(runtime: &NativeClient, strands: CommandStrands) -> Result<Self> {
-        let count = strands.count();
-        let mut idle = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            idle.push(runtime.open_session()?);
-        }
-        Ok(Self {
-            idle: Mutex::new(idle),
-            returned: Condvar::new(),
-        })
-    }
-
-    /// Takes a session, waiting while every one is running a command. The returned guard hands
-    /// the session back on drop.
-    fn checkout(&self) -> Checkout<'_> {
-        let mut idle = lock(&self.idle);
-        while idle.is_empty() {
-            idle = self
-                .returned
-                .wait(idle)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-        let session = idle.pop().expect("waited until a session was free");
-        Checkout {
-            pool: self,
-            session: Some(session),
-        }
-    }
-}
-
-/// A session on loan from the pool. Runs one command -- the only thing a borrowed session is
-/// for -- and returns to the pool when dropped.
-struct Checkout<'pool> {
-    pool: &'pool SessionPool,
-    session: Option<NativeSession>,
-}
-
-impl Checkout<'_> {
-    fn run_command(
+    /// [`run_command`](Client::run_command) that the caller can abandon.
+    ///
+    /// Answers `None` when `slot` was cancelled before any session picked the command up, in
+    /// which case it never ran. Otherwise the command runs and `slot` can interrupt it until it
+    /// returns; see [`CommandSlot`].
+    ///
+    /// Not public: nothing in the blocking API can abandon a call it is blocked inside. It is
+    /// the async layer, whose caller can drop the future, that needs this.
+    pub(crate) fn run_command_cancellable(
         &self,
+        slot: &CommandSlot,
+        database: &str,
+        command: &Document,
+    ) -> Option<Result<Document>> {
+        let encoded = match command.to_vec() {
+            Ok(encoded) => encoded,
+            Err(error) => return Some(Err(Error::from(error))),
+        };
+        let response = match self.pool.run(slot, database, &encoded)? {
+            Ok(response) => response,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(
+            Document::from_reader(response.as_slice())
+                .map_err(Error::from)
+                .and_then(validate_response),
+        )
+    }
+
+    /// [`run_command_bytes`](Client::run_command_bytes) that the caller can abandon, with the
+    /// same `None` meaning as [`run_command_cancellable`](Client::run_command_cancellable).
+    pub(crate) fn send_cancellable(
+        &self,
+        slot: &CommandSlot,
         database: &str,
         command: &[u8],
-    ) -> std::result::Result<Vec<u8>, embedded_mongodb_sys::Error> {
-        // The pool is unlocked for the whole command, so other threads run theirs on other
-        // sessions meanwhile -- which is the parallelism the pool exists to allow.
-        self.session
-            .as_ref()
-            .expect("a checked-out session is present until it is returned")
-            .run_command(database, command)
+    ) -> Option<Result<Vec<u8>>> {
+        self.pool.run(slot, database, command)
     }
-}
 
-impl Drop for Checkout<'_> {
-    fn drop(&mut self) {
-        if let Some(session) = self.session.take() {
-            lock(&self.pool.idle).push(session);
-            self.pool.returned.notify_one();
-        }
+    fn send(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
+        // A blocking caller is inside this call until it returns, so it has no way to abandon
+        // it: the slot is created and dropped here and never cancelled.
+        self.pool
+            .run(&CommandSlot::new(), database, command)
+            .expect("a slot nobody can cancel always runs its command")
     }
-}
-
-/// The pool's mutex guards a plain list; a panic under it leaves that list sound, and refusing
-/// it would strand every other caller waiting on the pool. So the poison is shrugged off, as
-/// `limits::process` does with its own.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

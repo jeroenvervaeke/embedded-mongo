@@ -8,11 +8,11 @@
 //! Callers park on a oneshot instead, which is what makes an `await` here cost a task and not
 //! a runtime thread.
 
-use crate::{Error, OpenOptions, Result, client::Client as BlockingClient};
+use super::shutdown::{Shutdown, lock};
+use crate::{Error, OpenOptions, Result, client::Client as BlockingClient, pool::CommandSlot};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use tokio::sync::oneshot;
 
 /// What travels from a task to a worker. `Run` carries the operation and its reply channel
@@ -119,6 +119,42 @@ impl Engine {
         response.await.map_err(|_| Error::Closed)?
     }
 
+    /// [`Engine::run`] for a command the caller may stop waiting for.
+    ///
+    /// Dropping the returned future interrupts the command rather than leaving it to run to
+    /// completion holding a session -- which is what makes a `tokio::time::timeout` or a losing
+    /// `select!` branch actually give the session back. A command still queued when the future
+    /// is dropped is never run at all.
+    ///
+    /// The interrupt cannot land on the wrong command: [`CommandSlot`] arms and disarms while
+    /// the session is still checked out, so a cancel arriving after the command finished finds
+    /// nothing to stop.
+    pub(super) async fn run_cancellable<T, F>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&BlockingClient, &CommandSlot) -> Option<Result<T>> + Send + 'static,
+    {
+        let (reply, response) = oneshot::channel();
+        let span = tracing::Span::current();
+        let slot = Arc::new(CommandSlot::new());
+        let dispatched = Arc::clone(&slot);
+        self.jobs
+            .send(Job::Run(Box::new(move |client| {
+                // `None` is a command that was cancelled before it started, so there is no
+                // answer to send and nobody waiting for one.
+                if let Some(result) = span.in_scope(|| operation(client, &dispatched)) {
+                    let _ = reply.send(result);
+                }
+            })))
+            .map_err(|_| Error::Closed)?;
+
+        // Cancels on every exit, including a normal one -- by then the slot has been disarmed
+        // by the worker, so the cancel finds nothing running and does nothing. Cheaper than
+        // tracking which exit this was.
+        let _interrupt = CancelOnDrop(&slot);
+        response.await.map_err(|_| Error::Closed)?
+    }
+
     /// [`Engine::run`] for work whose outcome nobody is left to hear -- a dropped cursor's
     /// `killCursors`. Nothing to await, so nothing for a `Drop` implementation to block on.
     pub(super) fn run_detached(&self, operation: impl FnOnce(&BlockingClient) + Send + 'static) {
@@ -144,54 +180,12 @@ impl Engine {
     }
 }
 
-/// The rendezvous that turns N retiring workers into one engine close.
-///
-/// Closing needs what no single worker has: certainty that every other worker has let go of
-/// the engine. Each worker deposits its handle here before counting itself out, so the worker
-/// whose decrement hits zero knows every handle is in the vault, drains it down to one, and
-/// closes the engine through that -- on a worker thread, which is where blocking work lives.
-struct Shutdown {
-    remaining: AtomicUsize,
-    handles: Mutex<Vec<Arc<BlockingClient>>>,
-    /// Reached only by the single worker whose decrement hits zero, so it never contends. The
-    /// `Mutex` is here only to get interior mutability for the `take` through the shared `Arc`,
-    /// not to guard against a race.
-    reply: Mutex<Option<oneshot::Sender<Result<()>>>>,
-}
+/// Interrupts a dispatched command when the future waiting for it goes away.
+struct CancelOnDrop<'slot>(&'slot CommandSlot);
 
-impl Shutdown {
-    fn new(workers: u32, reply: oneshot::Sender<Result<()>>) -> Self {
-        Self {
-            remaining: AtomicUsize::new(workers as usize),
-            handles: Mutex::new(Vec::with_capacity(workers as usize)),
-            reply: Mutex::new(Some(reply)),
-        }
-    }
-
-    /// Called once by every worker as it retires. The deposit has to precede the decrement:
-    /// the last worker's claim to the engine is that the vault is complete, and a worker that
-    /// counted out before depositing would leave that claim briefly false.
-    fn retire(&self, client: Arc<BlockingClient>) {
-        lock(&self.handles).push(client);
-        if self.remaining.fetch_sub(1, Ordering::AcqRel) != 1 {
-            return;
-        }
-
-        let mut handles = std::mem::take(&mut *lock(&self.handles));
-        let last = handles.pop();
-        // Every handle but the survivor goes first, so the `into_inner` below meets a count of
-        // one.
-        drop(handles);
-        let result = match last.and_then(Arc::into_inner) {
-            Some(client) => client.close(),
-            // Unreachable while workers are the only holders of engine handles, which they
-            // are; answered rather than unwrapped so a future holder is a wrong error, not
-            // an abort.
-            None => Err(Error::Closed),
-        };
-        if let Some(reply) = lock(&self.reply).take() {
-            let _ = reply.send(result);
-        }
+impl Drop for CancelOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -225,12 +219,4 @@ fn open_blocking(path: &Path, options: Option<OpenOptions>) -> Result<BlockingCl
         Some(options) => BlockingClient::with_options(path, options),
         None => BlockingClient::new(path),
     }
-}
-
-/// A poisoned lock here means a worker panicked with the guard held; the data under every one
-/// of these locks is still sound -- a queue, a vault of handles, a reply slot -- and refusing
-/// it would strand every other worker, so the poison is shrugged off the way
-/// `limits::process` does.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

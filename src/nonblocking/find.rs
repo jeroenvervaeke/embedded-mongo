@@ -79,7 +79,9 @@ impl<T> Cursor<T> {
         let database = self.database.clone();
         let response = self
             .engine
-            .run(move |client| client.run_command(&database, &command))
+            .run_cancellable(move |client, slot| {
+                client.run_command_cancellable(slot, &database, &command)
+            })
             .await?;
         let (id, documents) = take_cursor_batch(response, "nextBatch")?;
         self.id = id;

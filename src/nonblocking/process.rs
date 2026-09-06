@@ -6,6 +6,12 @@ use crate::{FreeDiskFloor, ReportedFloors, Result};
 /// floor outlives, why every open re-establishes it, what a half-moved pair would mean --
 /// holds unchanged. Each call here runs the blocking handle's logic on a worker thread, under
 /// the same process-wide lock, so async and blocking movers serialize against each other.
+/// Unlike every other command this crate awaits, these two are **not** cancelled by dropping
+/// their future. A floor is a pair of server parameters set by two commands, and abandoning the
+/// pair half-way is the very state
+/// [`Error::FreeDiskFloorNotRestored`](crate::Error::FreeDiskFloorNotRestored) exists to report:
+/// an engine left on floors nobody chose. Dropping one of these futures stops you waiting; the
+/// pair still completes.
 #[derive(Clone, Copy)]
 pub struct ProcessLimits<'client> {
     client: &'client Client,

@@ -28,7 +28,7 @@ anyhow = "1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 flate2 = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tracing-subscriber = "0.3"
 
 [[bench]]

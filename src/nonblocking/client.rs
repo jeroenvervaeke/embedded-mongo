@@ -18,14 +18,22 @@ use std::path::Path;
 ///
 /// # Cancellation
 ///
-/// A command in flight cannot be cancelled: the engine's entry point is a blocking call with
-/// no cancellation of its own, so once a worker has picked a command up it runs to completion.
-/// Dropping the future -- including by `tokio::time::timeout` -- abandons the *answer*, not the
-/// work, and frees the session only when the command actually finishes. A timeout therefore
-/// bounds how long you wait, never how long the engine works.
+/// Dropping a command's future cancels the command. A `tokio::time::timeout` or a losing
+/// `select!` branch therefore stops the engine working, not merely your waiting for it, and
+/// gives the session back rather than leaving it held for as long as the query would have run.
+/// A command still queued when its future is dropped is never started at all.
 ///
-/// Nothing is lost or corrupted by dropping one: the reply is discarded, the session returns to
-/// the pool, and the worker takes the next job.
+/// Two things to know about the interrupt. It is *cooperative*: the engine stops at its next
+/// interrupt check, so a cancel is prompt rather than instantaneous, and work that never
+/// reaches a check runs to completion. And it is *safe at any moment* -- an interrupt that
+/// arrives just as the command finishes cannot touch the next command to borrow that session,
+/// because the interrupt is given up while the session is still held.
+///
+/// Nothing is lost or corrupted by cancelling: the engine ends the operation the way it ends
+/// one that hit `maxTimeMS`, the reply is discarded, and the session returns to the pool.
+///
+/// [`ProcessLimits`] is the exception -- see there for why moving a floor must not be
+/// abandoned half-done.
 ///
 /// Commands run in parallel up to the session-pool size --
 /// [`OpenOptions::command_strands`], eight unless asked otherwise -- because there is one
@@ -68,7 +76,9 @@ impl Client {
     pub async fn run_command(&self, database: &str, command: Document) -> Result<Document> {
         let database = database.to_owned();
         self.engine
-            .run(move |client| client.run_command(&database, &command))
+            .run_cancellable(move |client, slot| {
+                client.run_command_cancellable(slot, &database, &command)
+            })
             .await
     }
 
@@ -80,7 +90,7 @@ impl Client {
     pub async fn run_command_bytes(&self, database: &str, command: Vec<u8>) -> Result<Vec<u8>> {
         let database = database.to_owned();
         self.engine
-            .run(move |client| client.run_command_bytes(&database, &command))
+            .run_cancellable(move |client, slot| client.send_cancellable(slot, &database, &command))
             .await
     }
 

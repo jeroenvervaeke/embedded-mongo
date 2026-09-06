@@ -18,6 +18,7 @@ mod engine;
 mod find;
 mod insert;
 mod process;
+mod shutdown;
 
 pub use client::Client;
 pub use collection::Collection;
