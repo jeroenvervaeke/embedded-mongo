@@ -1,3 +1,5 @@
+mod nonblocking;
+mod wait;
 mod wire;
 
 use std::sync::{PoisonError, RwLock};
@@ -97,5 +99,6 @@ impl NativeClient {
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<NativeClient>()
+    module.add_class::<NativeClient>()?;
+    module.add_class::<nonblocking::AsyncNativeClient>()
 }

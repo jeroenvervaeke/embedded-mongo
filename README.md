@@ -255,10 +255,57 @@ local.app.items.insert_one({"name": "embedded"})
 
 `mongodb+embedded://./data` is the URI-valid spelling and behaves identically.
 
-Run the included [Python example](examples/python/basic.py) with:
+### asyncio
+
+`AsyncMongoClient` makes the same substitution over PyMongo's asynchronous classes:
+
+```py
+import asyncio
+
+from pymongo_embedded import AsyncMongoClient
+
+
+async def main():
+    client = AsyncMongoClient("mongodb_embedded://./data")
+    try:
+        await client.app.items.insert_one({"name": "embedded"})
+        print(await client.app.items.count_documents({}))
+    finally:
+        await client.close()
+
+
+asyncio.run(main())
+```
+
+No command ever occupies the event loop: the engine's own worker threads do the blocking, and
+awaiting costs a parked task. Commands run in parallel over the same eight strands, so
+`asyncio.gather` over eight of them takes about as long as one.
+
+**Cancelling really cancels.** Dropping the future stops the engine rather than only stopping the
+wait, so a timeout bounds the work and not merely your patience, and the session goes back to the
+pool at once rather than when the query would have ended:
+
+```py
+try:
+    await asyncio.wait_for(cursor.to_list(), timeout=0.5)
+except TimeoutError:
+    ...  # the engine has stopped; the session is already free
+```
+
+The constructor is the one thing that blocks, deliberately. Opening does storage recovery and the
+one-time index repair scan, the longest block this library ever does and not something an event
+loop should be running. Construct before the loop starts, or reach for
+`await asyncio.to_thread(AsyncMongoClient, uri)` inside one.
+
+Only one embedded engine may be open per process, synchronous or asynchronous. Opening a second
+says `only one embedded MongoDB runtime may be open per process`; closing the first releases it.
+
+Run the included examples -- [synchronous](examples/python/basic.py) and
+[asyncio](examples/python/asynchronous.py) -- with:
 
 ```sh
 ./scripts/python
+./scripts/python examples/python/asynchronous.py
 ```
 
 The runner creates a clean environment under `.cache/python`, builds incrementally, and uses the
@@ -292,14 +339,14 @@ This package is not published to PyPI and is not installed from it. It is develo
 `mongo-python-driver` checkout, which `./scripts/python` wires up for you; the wheel exists so
 the engine can be vendored into one, not as a distribution.
 
-The initial binding supports synchronous PyMongo 4.18 commands, including normal CRUD, cursors,
+The binding supports PyMongo 4.18 commands through both clients, including normal CRUD, cursors,
 aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,
-transactions, change streams, exhaust cursors, and async PyMongo are not supported.
+transactions, change streams and exhaust cursors are not supported.
 
-Threads run in parallel. Every connection PyMongo hands out reaches the same engine, which runs
-commands over a pool of eight command strands, so eight threads issue eight commands at once
-rather than queueing behind one another. PyMongo's own `maxPoolSize` is the other ceiling, and a
-fan-out gets the smaller of the two.
+Threads and tasks both run in parallel. Every connection PyMongo hands out reaches the same
+engine, which runs commands over a pool of eight command strands, so eight of them issue eight
+commands at once rather than queueing behind one another. PyMongo's own `maxPoolSize` is the
+other ceiling, and a fan-out gets the smaller of the two.
 
 ## What this unlocks
 

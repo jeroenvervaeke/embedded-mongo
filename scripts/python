@@ -16,10 +16,14 @@ fi
 
 cargo build --release -p embedded-mongodb-python --manifest-path "$repo_root/Cargo.toml"
 
+# Everything the package is made of, rather than a list that has to be kept in step with it:
+# a module or subpackage added under python/ is picked up here without editing this script.
+# The extension module is the one thing that is not a source file, and it is linked below.
 package="$environment/site/pymongo_embedded"
 mkdir -p "$package"
-for source in __init__.py client.py pool.py; do
-    ln -sfn "$repo_root/python/pymongo_embedded/$source" "$package/$source"
+for source in "$repo_root"/python/pymongo_embedded/*; do
+    case $(basename "$source") in __pycache__) continue ;; esac
+    ln -sfn "$source" "$package/$(basename "$source")"
 done
 
 # The extension records a bare `libembedded_mongodb_native.so` with no RUNPATH, so it needs
