@@ -2,7 +2,7 @@ mod wire;
 
 use std::sync::Mutex;
 
-use embedded_mongodb::Client;
+use embedded_mongodb::blocking::Client;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule};

@@ -1,7 +1,7 @@
 //! Moving the free-disk floors on an engine that is already running.
 
 use super::{AdminCommands, FreeDiskFloor, ReportedFloors, knobs::reported_floors};
-use crate::{Client, Error, Result};
+use crate::{Error, Result, client::Client};
 use std::sync::{Mutex, PoisonError};
 
 /// The limits that belong to this process rather than to the [`Client`] they are reached
@@ -26,7 +26,7 @@ use std::sync::{Mutex, PoisonError};
 /// in front of a reader at every call site instead of only where the function is defined:
 ///
 /// ```no_run
-/// use embedded_mongodb::{Client, FreeDiskFloor};
+/// use embedded_mongodb::{FreeDiskFloor, blocking::Client};
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = Client::new("./data")?;
 ///

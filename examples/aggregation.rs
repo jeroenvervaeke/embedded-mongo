@@ -1,7 +1,7 @@
 // cargo run --release --example aggregation
 
 use anyhow::Result;
-use embedded_mongodb::{Client, bson::doc};
+use embedded_mongodb::{blocking::Client, bson::doc};
 
 fn main() -> Result<()> {
     // The database files are deleted when this temporary directory is dropped.

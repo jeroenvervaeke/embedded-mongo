@@ -2,7 +2,8 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, Error,
+    Error,
+    blocking::Client,
     bson::{Bson, doc, oid::ObjectId},
 };
 use serde::{Deserialize, Serialize};

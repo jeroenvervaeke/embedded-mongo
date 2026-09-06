@@ -1,4 +1,4 @@
-use crate::{Collection, Cursor, Result};
+use crate::{Result, collection::Collection, find::Cursor};
 use bson::{Bson, Document};
 
 impl<'client, T> Collection<'client, T> {
@@ -6,14 +6,9 @@ impl<'client, T> Collection<'client, T> {
         &self,
         pipeline: impl IntoIterator<Item = Document>,
     ) -> Result<Cursor<'client, Document>> {
-        let pipeline = pipeline.into_iter().map(Bson::Document).collect::<Vec<_>>();
         let response = self.client().run_command(
             self.database_name(),
-            &bson::doc! {
-                "aggregate": self.name(),
-                "pipeline": pipeline,
-                "cursor": Document::new(),
-            },
+            &aggregate_command(self.name(), pipeline),
         )?;
         Cursor::from_response(
             self.client(),
@@ -22,5 +17,19 @@ impl<'client, T> Collection<'client, T> {
             response,
             "firstBatch",
         )
+    }
+}
+
+/// Shared with the async layer in `crate::nonblocking`, like the builders in `find` and
+/// `insert`.
+pub(crate) fn aggregate_command(
+    collection: &str,
+    pipeline: impl IntoIterator<Item = Document>,
+) -> Document {
+    let pipeline = pipeline.into_iter().map(Bson::Document).collect::<Vec<_>>();
+    bson::doc! {
+        "aggregate": collection,
+        "pipeline": pipeline,
+        "cursor": Document::new(),
     }
 }

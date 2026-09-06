@@ -30,6 +30,7 @@ pub struct EngineOptions {
     cache: Option<CacheSize>,
     journal_file_size: Option<JournalFileSize>,
     journal_preallocation: Option<Preallocation>,
+    command_strands: Option<CommandStrands>,
 }
 
 /// The ceiling on the WiredTiger cache. A ceiling rather than an allocation: the engine grows
@@ -54,6 +55,16 @@ pub enum Preallocation {
     Disabled,
 }
 
+/// How many commands the engine will run in parallel.
+///
+/// Each strand is a MongoDB session -- what a connection would be to a server -- so this is
+/// the embedded engine's connection count: parallel commands beyond it wait for a strand to
+/// come free rather than failing. It is a count of sessions, not of threads. A command still
+/// executes on the thread that called [`crate::Client::run_command`], so parallelism also
+/// takes that many calling threads; a strand nobody is calling on costs one idle session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CommandStrands(u32);
+
 impl EngineOptions {
     pub fn new() -> Self {
         Self::default()
@@ -74,6 +85,17 @@ impl EngineOptions {
         self
     }
 
+    pub fn command_strands(mut self, strands: CommandStrands) -> Self {
+        self.command_strands = Some(strands);
+        self
+    }
+
+    /// What was asked for, if anything: callers sizing something to the pool -- a worker
+    /// thread apiece, say -- read it here rather than restating it.
+    pub fn requested_command_strands(&self) -> Option<CommandStrands> {
+        self.command_strands
+    }
+
     /// The shape `embedded_mongodb_open_with_options` reads, where zero means "the engine's
     /// default" in every field.
     pub(crate) fn to_ffi(self) -> crate::ffi::bridge::NativeOpenOptions {
@@ -81,6 +103,7 @@ impl EngineOptions {
             cache_size_mb: self.cache.map_or(0, CacheSize::mebibytes),
             journal_file_max_kb: self.journal_file_size.map_or(0, JournalFileSize::kibibytes),
             journal_prealloc: self.journal_preallocation.map_or(0, Preallocation::native),
+            command_strands: self.command_strands.map_or(0, CommandStrands::count),
         }
     }
 }
@@ -140,6 +163,35 @@ impl Preallocation {
     }
 }
 
+impl CommandStrands {
+    /// This library's own bound rather than MongoDB's: the engine runs thousands of sessions
+    /// happily, but a strand is only useful with a calling thread parked in
+    /// `run_command` on it, and 256 is far past where parallelism on an embedded engine
+    /// stops paying. Must match `kMaxCommandStrands` in `native/engine_options.cpp`.
+    pub const MIN_COUNT: u32 = 1;
+    pub const MAX_COUNT: u32 = 256;
+
+    /// What an open that asks for nothing gets, restated from `kDefaultCommandStrands` in
+    /// `native/engine_options.cpp` because callers sizing threads to the pool need the
+    /// number before the engine exists to ask.
+    pub const DEFAULT_COUNT: u32 = 8;
+
+    pub fn from_count(count: u32) -> Result<Self, OutOfRange> {
+        check_range(
+            "command strands",
+            "strands",
+            count,
+            Self::MIN_COUNT,
+            Self::MAX_COUNT,
+        )
+        .map(Self)
+    }
+
+    pub fn count(self) -> u32 {
+        self.0
+    }
+}
+
 /// Checks one limit against its range, so that every newtype here and every one built on top
 /// of this crate reports a range violation the same way and from the same code.
 pub fn check_range(
@@ -163,7 +215,7 @@ pub fn check_range(
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheSize, EngineOptions, JournalFileSize, Preallocation};
+    use super::{CacheSize, CommandStrands, EngineOptions, JournalFileSize, Preallocation};
 
     #[test]
     fn unset_options_ask_the_engine_for_its_defaults() {
@@ -172,6 +224,7 @@ mod tests {
         assert_eq!(ffi.cache_size_mb, 0);
         assert_eq!(ffi.journal_file_max_kb, 0);
         assert_eq!(ffi.journal_prealloc, 0);
+        assert_eq!(ffi.command_strands, 0);
     }
 
     #[test]
@@ -227,5 +280,27 @@ mod tests {
         assert!(CacheSize::from_mebibytes(CacheSize::MAX_MEBIBYTES).is_ok());
         assert!(JournalFileSize::from_kibibytes(JournalFileSize::MIN_KIBIBYTES).is_ok());
         assert!(JournalFileSize::from_kibibytes(JournalFileSize::MAX_KIBIBYTES).is_ok());
+        assert!(CommandStrands::from_count(CommandStrands::MIN_COUNT).is_ok());
+        assert!(CommandStrands::from_count(CommandStrands::MAX_COUNT).is_ok());
+    }
+
+    #[test]
+    fn command_strands_reach_the_engine_as_a_count() {
+        let ffi = EngineOptions::new()
+            .command_strands(CommandStrands::from_count(4).expect("4 strands is in range"))
+            .to_ffi();
+
+        assert_eq!(ffi.command_strands, 4);
+    }
+
+    #[test]
+    fn a_strand_pool_outside_the_range_is_refused() {
+        let error = CommandStrands::from_count(0).expect_err("0 strands is below the minimum");
+
+        assert_eq!(
+            error.to_string(),
+            "command strands must be between 1 and 256 strands, got 0"
+        );
+        assert!(CommandStrands::from_count(CommandStrands::MAX_COUNT + 1).is_err());
     }
 }

@@ -1,5 +1,6 @@
 use crate::{
-    Database, Error, OpenOptions, ProcessLimits, Result, error::validate_response, limits, repair,
+    Error, OpenOptions, Result, database::Database, error::validate_response, limits,
+    limits::ProcessLimits, repair,
 };
 use bson::Document;
 use embedded_mongodb_sys::Client as NativeClient;

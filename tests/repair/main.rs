@@ -17,7 +17,8 @@ mod inspect;
 mod logs;
 
 use embedded_mongodb::{
-    Client, Error,
+    Error,
+    blocking::Client,
     bson::{Bson, doc},
 };
 use inspect::{count, is_valid, lost_and_found, surviving_customers};

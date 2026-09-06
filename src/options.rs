@@ -11,7 +11,9 @@
 //! as it opens.
 
 use crate::limits::FreeDiskFloor;
-use embedded_mongodb_sys::{CacheSize, EngineOptions, JournalFileSize, Preallocation};
+use embedded_mongodb_sys::{
+    CacheSize, CommandStrands, EngineOptions, JournalFileSize, Preallocation,
+};
 
 /// Storage limits for [`crate::Client::with_options`]. Anything left unset keeps the engine's
 /// own default, so `Client::new(path)` and `Client::with_options(path, OpenOptions::new())`
@@ -52,6 +54,22 @@ impl OpenOptions {
     pub fn free_disk_floor(mut self, floor: FreeDiskFloor) -> Self {
         self.free_disk_floor = Some(floor);
         self
+    }
+
+    /// How many commands the engine will run in parallel -- its session count, and with it
+    /// how many worker threads the async [`Client`](crate::Client) starts, one per strand.
+    /// Left unset it is [`CommandStrands::DEFAULT_COUNT`].
+    pub fn command_strands(mut self, strands: CommandStrands) -> Self {
+        self.engine = self.engine.command_strands(strands);
+        self
+    }
+
+    /// What the async layer sizes its worker pool to: the strands asked for, or the count the
+    /// engine defaults to when nobody asks.
+    pub(crate) fn worker_count(options: Option<&Self>) -> u32 {
+        options
+            .and_then(|options| options.engine.requested_command_strands())
+            .map_or(CommandStrands::DEFAULT_COUNT, CommandStrands::count)
     }
 }
 

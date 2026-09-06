@@ -22,6 +22,7 @@
 #include "mongo/db/topology/cluster_role.h"
 #include "mongo/rpc/op_msg.h"
 #include "mongo/util/assert_util.h"
+#include "mongo/util/scopeguard.h"
 #include "mongo/util/version/releases.h"
 
 #include <exception>
@@ -73,7 +74,12 @@ std::vector<std::uint8_t> Runtime::runCommand(std::string_view database,
             "BSON command contains trailing bytes",
             static_cast<std::size_t>(commandObject.objsize()) == commandLen);
 
-    auto clientGuard = _strand->bind();
+    // Every parallel caller gets its own strand, so commands contend exactly where mongod's
+    // sessions do rather than on a single Client. A caller past the pool waits here for a
+    // strand to come back instead of failing: the pool bounds parallelism, not admission.
+    const auto strandIndex = acquireStrand();
+    const mongo::ScopeGuard returnStrand([&] { releaseStrand(strandIndex); });
+    auto clientGuard = _strands[strandIndex]->bind();
     auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
     mongo::DBDirectClient client(opCtx.get());
     auto request = mongo::OpMsgRequestBuilder::create(
@@ -91,6 +97,22 @@ void Runtime::close() {
     cleanup(true);
 }
 
+std::size_t Runtime::acquireStrand() {
+    std::unique_lock lock(_poolMutex);
+    _strandReturned.wait(lock, [&] { return !_freeStrands.empty(); });
+    const auto index = _freeStrands.back();
+    _freeStrands.pop_back();
+    return index;
+}
+
+void Runtime::releaseStrand(std::size_t index) {
+    {
+        std::lock_guard lock(_poolMutex);
+        _freeStrands.push_back(index);
+    }
+    _strandReturned.notify_one();
+}
+
 void Runtime::initialize(std::string path, const ResolvedOptions& options) {
     runInitializers();
 
@@ -104,9 +126,20 @@ void Runtime::initialize(std::string path, const ResolvedOptions& options) {
 
     installProcessServices(_serviceContext);
 
-    _strand = mongo::ClientStrand::make(
-        _serviceContext->getService()->makeClient("embedded-mongodb", nullptr));
-    auto clientGuard = _strand->bind();
+    // The whole pool exists before storage comes up: strands are only Client objects, and
+    // making them here rather than lazily means `runCommand` never creates one -- its free
+    // list is complete from the first command to the last. The first keeps the name the
+    // engine has always logged under; startup and shutdown run on it.
+    _strands.reserve(options.commandStrands);
+    _freeStrands.reserve(options.commandStrands);
+    for (std::size_t index = 0; index < options.commandStrands; ++index) {
+        const auto name =
+            index == 0 ? std::string("embedded-mongodb") : "embedded-mongodb-" + std::to_string(index);
+        _strands.push_back(
+            mongo::ClientStrand::make(_serviceContext->getService()->makeClient(name, nullptr)));
+        _freeStrands.push_back(index);
+    }
+    auto clientGuard = _strands.front()->bind();
 
     mongo::storageGlobalParams.dbpath = dbPath.string();
     mongo::storageGlobalParams.engine = "wiredTiger";
@@ -152,10 +185,10 @@ void Runtime::cleanup(bool reportFailure) {
     };
 
     if (_serviceContext) {
-        if (_indexBuildsStarted && _strand) {
+        if (_indexBuildsStarted && !_strands.empty()) {
             _indexBuildsStarted = false;
             attempt([&] {
-                auto clientGuard = _strand->bind();
+                auto clientGuard = _strands.front()->bind();
                 auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
                 mongo::IndexBuildsCoordinator::get(_serviceContext)->shutdown(opCtx.get());
             });
@@ -166,9 +199,9 @@ void Runtime::cleanup(bool reportFailure) {
             mongo::DatabaseShardingStateFactory::clear(_serviceContext);
         });
 
-        if (_storageStarted && _strand) {
+        if (_storageStarted && !_strands.empty()) {
             attempt([&] {
-                auto clientGuard = _strand->bind();
+                auto clientGuard = _strands.front()->bind();
                 auto opCtx = _serviceContext->makeOperationContext(clientGuard.get());
                 mongo::Lock::GlobalLock globalLock(opCtx.get(), mongo::MODE_X);
                 mongo::DatabaseHolder::get(opCtx.get())->closeAll(opCtx.get());
@@ -188,7 +221,8 @@ void Runtime::cleanup(bool reportFailure) {
             }
         });
 
-        _strand.reset();
+        _strands.clear();
+        _freeStrands.clear();
         mongo::setGlobalServiceContext({});
         _serviceContext = nullptr;
     }

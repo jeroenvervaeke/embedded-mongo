@@ -13,7 +13,7 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client,
+    blocking::Client,
     bson::{Bson, Document, doc, oid::ObjectId},
 };
 

@@ -4,9 +4,10 @@ pub struct Client {
     inner: cxx::UniquePtr<ffi::bridge::EmbeddedMongo>,
 }
 
-// SAFETY: Runtime::runCommand holds a ClientStrand guard for the entire operation, and
-// ClientStrand serializes bindings across threads. Closing requires exclusive Rust access.
-// ponytail: one strand serializes commands; add native clients only if parallelism is needed.
+// SAFETY: Runtime::runCommand takes a strand from its pool and holds that strand's guard for
+// the entire operation, so up to `CommandStrands` commands run in parallel, each on its own
+// mongo::Client, and callers past the pool wait inside the FFI for a strand to come back.
+// Closing requires exclusive Rust access.
 unsafe impl Send for Client {}
 unsafe impl Sync for Client {}
 

@@ -9,6 +9,8 @@ pub(crate) mod bridge {
         journal_file_max_kb: u32,
         /// An `embedded_mongodb_journal_prealloc`; see `crate::Preallocation`.
         journal_prealloc: u32,
+        /// How many commands may run in parallel; see `crate::CommandStrands`.
+        command_strands: u32,
     }
 
     extern "Rust" {

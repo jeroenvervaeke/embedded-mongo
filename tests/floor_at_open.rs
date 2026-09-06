@@ -16,7 +16,7 @@
 #[path = "scratch/mod.rs"]
 mod scratch;
 
-use embedded_mongodb::{Client, FreeDiskFloor, OpenOptions};
+use embedded_mongodb::{FreeDiskFloor, OpenOptions, blocking::Client};
 use std::{
     env,
     path::{Path, PathBuf},

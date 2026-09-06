@@ -1,19 +1,13 @@
-use crate::{Client, Collection, Error, Result};
+use crate::{Error, Result, client::Client, collection::Collection};
 use bson::{Bson, Document};
 use serde::de::DeserializeOwned;
 use std::{collections::VecDeque, marker::PhantomData};
 
 impl<'client, T: DeserializeOwned> Collection<'client, T> {
     pub fn find_one(&self, filter: Document) -> Result<Option<T>> {
-        let response = self.client().run_command(
-            self.database_name(),
-            &bson::doc! {
-                "find": self.name(),
-                "filter": filter,
-                "limit": 1_i64,
-                "singleBatch": true,
-            },
-        )?;
+        let response = self
+            .client()
+            .run_command(self.database_name(), &find_one_command(self.name(), filter))?;
         let mut cursor = Cursor::<T>::from_response(
             self.client(),
             self.database_name(),
@@ -25,13 +19,9 @@ impl<'client, T: DeserializeOwned> Collection<'client, T> {
     }
 
     pub fn find(&self, filter: Document) -> Result<Cursor<'client, T>> {
-        let response = self.client().run_command(
-            self.database_name(),
-            &bson::doc! {
-                "find": self.name(),
-                "filter": filter,
-            },
-        )?;
+        let response = self
+            .client()
+            .run_command(self.database_name(), &find_command(self.name(), filter))?;
         Cursor::from_response(
             self.client(),
             self.database_name(),
@@ -39,6 +29,39 @@ impl<'client, T: DeserializeOwned> Collection<'client, T> {
             response,
             "firstBatch",
         )
+    }
+}
+
+// The commands themselves, shared with the async layer in `crate::nonblocking`: what a find,
+// a getMore or a killCursors says to the engine is one fact, however it is dispatched.
+
+pub(crate) fn find_one_command(collection: &str, filter: Document) -> Document {
+    bson::doc! {
+        "find": collection,
+        "filter": filter,
+        "limit": 1_i64,
+        "singleBatch": true,
+    }
+}
+
+pub(crate) fn find_command(collection: &str, filter: Document) -> Document {
+    bson::doc! {
+        "find": collection,
+        "filter": filter,
+    }
+}
+
+pub(crate) fn get_more_command(id: i64, collection: &str) -> Document {
+    bson::doc! {
+        "getMore": id,
+        "collection": collection,
+    }
+}
+
+pub(crate) fn kill_cursors_command(collection: &str, id: i64) -> Document {
+    bson::doc! {
+        "killCursors": collection,
+        "cursors": [id],
     }
 }
 
@@ -75,13 +98,9 @@ impl<'client, T> Cursor<'client, T> {
 
 impl<T> Cursor<'_, T> {
     fn fetch_next_batch(&mut self) -> Result<()> {
-        let response = self.client.run_command(
-            &self.database,
-            &bson::doc! {
-                "getMore": self.id,
-                "collection": self.collection.as_str(),
-            },
-        )?;
+        let response = self
+            .client
+            .run_command(&self.database, &get_more_command(self.id, &self.collection))?;
         let (id, documents) = take_cursor_batch(response, "nextBatch")?;
         self.id = id;
         self.documents = documents;
@@ -93,13 +112,8 @@ impl<T> Cursor<'_, T> {
         if id == 0 {
             return Ok(());
         }
-        self.client.run_command(
-            &self.database,
-            &bson::doc! {
-                "killCursors": self.collection.as_str(),
-                "cursors": [id],
-            },
-        )?;
+        self.client
+            .run_command(&self.database, &kill_cursors_command(&self.collection, id))?;
         Ok(())
     }
 }
@@ -136,7 +150,7 @@ impl<T> Drop for Cursor<'_, T> {
     }
 }
 
-fn take_cursor_batch(
+pub(crate) fn take_cursor_batch(
     mut response: Document,
     batch_name: &str,
 ) -> Result<(i64, VecDeque<Document>)> {

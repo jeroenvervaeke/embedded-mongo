@@ -1,4 +1,4 @@
-use embedded_mongodb::Client;
+use embedded_mongodb::blocking::Client;
 use jni::objects::{JByteArray, JClass, JLongArray, JString};
 use jni::sys::jlong;
 use jni::{Env, EnvUnowned};

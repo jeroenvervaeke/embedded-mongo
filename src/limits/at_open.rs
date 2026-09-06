@@ -38,7 +38,7 @@ use super::{
     knobs::{reported_floors, send},
     process::FloorMoves,
 };
-use crate::{Client, Result};
+use crate::{Result, client::Client};
 use std::sync::{Mutex, PoisonError};
 
 /// Puts `requested` in force on an engine that has just opened, or MongoDB's own floors where

@@ -6,7 +6,7 @@ use super::{
     inspect::{count, names, optional_names, report_validation, summary},
 };
 use anyhow::{Context, Result};
-use embedded_mongodb::{Client, bson::doc};
+use embedded_mongodb::{blocking::Client, bson::doc};
 use std::{path::Path, time::Instant};
 
 /// Reopens after a kill and reports what survived: how long the reopen took, what the catalog

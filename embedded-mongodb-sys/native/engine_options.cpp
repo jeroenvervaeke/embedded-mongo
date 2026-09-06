@@ -48,6 +48,13 @@ constexpr std::uint32_t kDefaultJournalFileMaxKB = 8 * 1024;
 // writing thread. tests/durability is what actually settles it.
 constexpr bool kDefaultJournalPrealloc = false;
 
+// Eight parallel commands, chosen as a small multiple of the cores on the devices this engine
+// targets rather than derived from anything measured. A strand is a session, not a thread --
+// idle ones cost a Client object apiece -- so the price of a few spares is negligible next to
+// guessing too low and serializing a caller who fanned out work. Callers with a real number
+// state one; zero takes this.
+constexpr std::uint32_t kDefaultCommandStrands = 8;
+
 // WiredTiger's own limits, from src/third_party/wiredtiger/src/config/config_def.c, where
 // cache_size is "min=1MB,max=10TB" and log.file_max is "min=100KB,max=2GB". Checking them
 // here turns a value WiredTiger would reject inside wiredtiger_open -- where it surfaces as
@@ -56,6 +63,13 @@ constexpr std::uint32_t kMinCacheSizeMB = 1;
 constexpr std::uint32_t kMaxCacheSizeMB = 10 * 1000 * 1000;
 constexpr std::uint32_t kMinJournalFileMaxKB = 100;
 constexpr std::uint32_t kMaxJournalFileMaxKB = 2 * 1024 * 1024;
+
+// Unlike the two limits above, this bound is this library's own: MongoDB happily runs
+// thousands of sessions. It exists because every strand a caller asks for needs a thread of
+// the caller's sitting in `embedded_mongodb_run_command` to be useful, and 256 is far past
+// where extra parallelism on an embedded engine stops buying anything.
+constexpr std::uint32_t kMinCommandStrands = 1;
+constexpr std::uint32_t kMaxCommandStrands = 256;
 
 /// Copies as much of the caller's struct as the caller says exists, leaving everything past
 /// it zero. Reading a member the caller never allocated would be a read off the end of their
@@ -137,6 +151,11 @@ ResolvedOptions resolveOptions(const embedded_mongodb_open_options* options) {
                                     kDefaultJournalFileMaxKB,
                                     "journal_file_max_kb"),
         .journalPrealloc = resolvePrealloc(asked.journal_prealloc),
+        .commandStrands = inRange(asked.command_strands,
+                                  kMinCommandStrands,
+                                  kMaxCommandStrands,
+                                  kDefaultCommandStrands,
+                                  "command_strands"),
     };
 }
 

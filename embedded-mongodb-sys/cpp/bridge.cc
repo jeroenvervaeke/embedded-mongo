@@ -120,6 +120,7 @@ std::unique_ptr<EmbeddedMongo> open_with_options(rust::Str path,
     native.cache_size_mb = options.cache_size_mb;
     native.journal_file_max_kb = options.journal_file_max_kb;
     native.journal_prealloc = options.journal_prealloc;
+    native.command_strands = options.command_strands;
 
     embedded_mongodb_handle* handle = nullptr;
     char* error = nullptr;

@@ -51,6 +51,13 @@ struct embedded_mongodb_open_options {
     std::uint32_t journal_file_max_kb;
     /// One of embedded_mongodb_journal_prealloc.
     std::uint32_t journal_prealloc;
+    /// How many commands may execute in parallel. Each is a MongoDB Client -- what a
+    /// connection would be on a server -- so this is the embedded equivalent of a connection
+    /// count: commands beyond it wait for one to come free rather than failing. Sized at
+    /// open because the pool is part of the runtime this library keeps for the life of the
+    /// handle; it is a count of sessions, not of threads -- a command still executes on the
+    /// thread that called `embedded_mongodb_run_command`.
+    std::uint32_t command_strands;
 };
 
 typedef void (*embedded_mongodb_log_callback)(std::int32_t severity,

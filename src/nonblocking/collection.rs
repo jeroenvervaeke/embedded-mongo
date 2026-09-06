@@ -1,4 +1,4 @@
-use crate::client::Client;
+use super::Client;
 use bson::Document;
 use std::marker::PhantomData;
 
@@ -10,7 +10,7 @@ pub struct Collection<'client, T = Document> {
 }
 
 impl<'client, T> Collection<'client, T> {
-    pub(crate) fn new(client: &'client Client, database: String, name: &str) -> Self {
+    pub(super) fn new(client: &'client Client, database: String, name: &str) -> Self {
         Self {
             client,
             database,
@@ -19,7 +19,7 @@ impl<'client, T> Collection<'client, T> {
         }
     }
 
-    pub(crate) fn client(&self) -> &'client Client {
+    pub(super) fn client(&self) -> &'client Client {
         self.client
     }
 

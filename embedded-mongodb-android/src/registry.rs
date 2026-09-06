@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use embedded_mongodb::Client;
+use embedded_mongodb::blocking::Client;
 
 use crate::error::{BridgeError, Result};
 use crate::handle::{Counter, HandleId};

@@ -1,4 +1,5 @@
-use crate::{Result, client::Client, collection::Collection};
+use super::{Client, Collection};
+use crate::Result;
 use bson::Document;
 
 pub struct Database<'client> {
@@ -7,7 +8,7 @@ pub struct Database<'client> {
 }
 
 impl<'client> Database<'client> {
-    pub(crate) fn new(client: &'client Client, name: &str) -> Self {
+    pub(super) fn new(client: &'client Client, name: &str) -> Self {
         Self {
             client,
             name: name.to_owned(),
@@ -22,7 +23,7 @@ impl<'client> Database<'client> {
         Collection::new(self.client, self.name.clone(), name)
     }
 
-    pub fn run_command(&self, command: &Document) -> Result<Document> {
-        self.client.run_command(&self.name, command)
+    pub async fn run_command(&self, command: Document) -> Result<Document> {
+        self.client.run_command(&self.name, command).await
     }
 }

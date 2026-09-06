@@ -17,6 +17,10 @@ bson = { version = "3.1.0", features = ["serde"] }
 embedded-mongodb-sys = { path = "embedded-mongodb-sys" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+# Only the synchronization primitives: the async layer parks callers on a oneshot and runs
+# commands on its own strand-sized worker threads, so it needs no runtime of tokio's and works
+# under whichever one the caller drives it from.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 tracing = "0.1"
 
 [dev-dependencies]
@@ -24,6 +28,7 @@ anyhow = "1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 flate2 = "1"
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3"
 
 [[bench]]
