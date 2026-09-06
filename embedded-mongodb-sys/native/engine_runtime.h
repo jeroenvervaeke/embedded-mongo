@@ -86,6 +86,10 @@ public:
                                          std::size_t commandLen);
 
 private:
+    // Order is load-bearing: members destroy in reverse declaration order, so `_strand` (the
+    // Client) is torn down before this session's `_runtime` reference is released. Destroying a
+    // Client deregisters it from its Service, so the Service must still be alive at that point;
+    // declaring `_runtime` first keeps it alive across the strand's destruction. Do not reorder.
     std::shared_ptr<Runtime> _runtime;
     mongo::ClientStrandPtr _strand;
 };

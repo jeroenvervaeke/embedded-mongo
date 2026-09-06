@@ -55,6 +55,10 @@ impl CommandStrands {
     /// serialized, cheap enough that a caller who does not is out only a few idle clients.
     pub const DEFAULT_COUNT: u32 = 8;
 
+    /// The default as a value, so that resolving an unset option yields a `CommandStrands` --
+    /// carrying the "at least one" guarantee -- rather than a bare number.
+    pub const DEFAULT: Self = Self(Self::DEFAULT_COUNT);
+
     pub fn from_count(count: u32) -> Result<Self, OutOfRange> {
         check_range(
             "command strands",
@@ -110,11 +114,13 @@ impl OpenOptions {
         self
     }
 
-    /// The session-pool size an open resolves to: what was asked for, or the default.
-    pub(crate) fn strand_count(options: Option<&Self>) -> u32 {
+    /// The session-pool size an open resolves to: what was asked for, or the default. Returns
+    /// the newtype, so the "at least one session" guarantee travels to the pool and the worker
+    /// count rather than being dropped for a bare `u32` at the boundary that relies on it.
+    pub(crate) fn strand_count(options: Option<&Self>) -> CommandStrands {
         options
             .and_then(|options| options.command_strands)
-            .map_or(CommandStrands::DEFAULT_COUNT, CommandStrands::count)
+            .unwrap_or(CommandStrands::DEFAULT)
     }
 }
 
@@ -146,14 +152,11 @@ mod tests {
 
     #[test]
     fn the_strand_count_defaults_when_unset_and_takes_what_is_asked() {
-        assert_eq!(
-            OpenOptions::strand_count(None),
-            CommandStrands::DEFAULT_COUNT
-        );
+        assert_eq!(OpenOptions::strand_count(None), CommandStrands::DEFAULT);
 
         let asked = OpenOptions::new()
             .command_strands(CommandStrands::from_count(3).expect("3 strands is in range"));
-        assert_eq!(OpenOptions::strand_count(Some(&asked)), 3);
+        assert_eq!(OpenOptions::strand_count(Some(&asked)).count(), 3);
     }
 
     #[test]

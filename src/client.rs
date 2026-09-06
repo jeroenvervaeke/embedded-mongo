@@ -1,6 +1,6 @@
 use crate::{
-    Error, OpenOptions, Result, database::Database, error::validate_response, limits,
-    limits::ProcessLimits, options, repair,
+    CommandStrands, Error, OpenOptions, Result, database::Database, error::validate_response,
+    limits, limits::ProcessLimits, options, repair,
 };
 use bson::Document;
 use embedded_mongodb_sys::{Client as NativeClient, Session as NativeSession};
@@ -13,20 +13,17 @@ pub struct Client {
     /// because a `Client` is shared across threads and each session runs one command at a time:
     /// a caller checks one out for the length of its command and hands it back. This is the
     /// whole of the parallelism policy, and it is here, in Rust, rather than in the engine.
-    ///
-    /// Declared before `runtime` on purpose: a `Client` dropped without an explicit
-    /// [`close`](Client::close) drops its fields in this order, and every session must be gone
-    /// before the runtime that owns their engine is torn down. `close` drops the pool first for
-    /// the same reason.
     pool: SessionPool,
-    /// The runtime handle, closed after the pool so no session outlives the engine.
+    /// The runtime handle. Each session shares ownership of the engine with it, so the order in
+    /// which these two fields drop does not matter: the engine closes only once both the pool's
+    /// sessions and this handle are gone. [`close`](Client::close) still drops the pool first,
+    /// so that the handle is then the sole owner and the close can run eagerly and report.
     runtime: NativeClient,
 }
 
-// SAFETY: NativeClient is Send + Sync; the pool guards its sessions behind a mutex and hands
-// each to one thread at a time, which is what NativeSession (Send, not Sync) requires.
-unsafe impl Send for Client {}
-unsafe impl Sync for Client {}
+// Client is Send + Sync by composition -- SessionPool over Send sessions, and NativeClient,
+// which carries its own vetted unsafe impls -- so the compiler derives both, and will stop
+// deriving them if a field ever stops being thread-safe. No hand-written impl to go stale.
 
 impl Client {
     /// Opens the database directory at `path`, creating it if it is not there.
@@ -159,9 +156,11 @@ impl Client {
 
     #[tracing::instrument(name = "embedded_mongodb.close", level = "debug", skip_all, err)]
     pub fn close(self) -> Result<()> {
-        // Every session dropped before the runtime is closed: the pool is torn down here,
-        // while `self` still owns it, so no session can outlive the engine it holds a client
-        // of. `close` taking `self` is what guarantees no checkout is in flight.
+        // The pool is dropped first so the runtime handle is then the engine's sole owner and
+        // the close below runs eagerly and reports its result. Safety does not rest on this
+        // order -- a session shares ownership of the engine, so the engine cannot close under
+        // one either way -- but a clean, error-reporting close does. `close` taking `self`
+        // guarantees no checkout is in flight.
         drop(self.pool);
         self.runtime.close().map_err(Error::from)
     }
@@ -187,9 +186,14 @@ struct SessionPool {
 }
 
 impl SessionPool {
-    fn open(runtime: &NativeClient, strands: u32) -> Result<Self> {
-        let mut idle = Vec::with_capacity(strands as usize);
-        for _ in 0..strands {
+    /// Takes a [`CommandStrands`] rather than a bare count: the pool must hold at least one
+    /// session or [`checkout`](SessionPool::checkout) would wait forever, and that "at least
+    /// one" is exactly what the newtype guarantees. The invariant reaches the loop as a type,
+    /// not as an unchecked number.
+    fn open(runtime: &NativeClient, strands: CommandStrands) -> Result<Self> {
+        let count = strands.count();
+        let mut idle = Vec::with_capacity(count as usize);
+        for _ in 0..count {
             idle.push(runtime.open_session()?);
         }
         Ok(Self {

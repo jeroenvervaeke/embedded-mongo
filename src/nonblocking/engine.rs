@@ -9,6 +9,7 @@
 //! a runtime thread.
 
 use crate::{Error, OpenOptions, Result, client::Client as BlockingClient};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
@@ -39,8 +40,10 @@ impl Engine {
     /// on the runtime the caller is awaiting from.
     pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<Self> {
         // One worker per session in the blocking client's pool: each worker holds exactly one
-        // session for the length of a command, so this many run in parallel and none waits.
-        let workers = OpenOptions::strand_count(options.as_ref());
+        // session for the length of a command, so this many run in parallel and none waits --
+        // the pool's checkout is therefore uncontended when driven from here, though it still
+        // does its job for the blocking API, whose caller threads are arbitrary and many.
+        let workers = OpenOptions::strand_count(options.as_ref()).count();
         let (jobs, queue) = mpsc::channel();
         let queue = Arc::new(Mutex::new(queue));
         let (ready, opened) = oneshot::channel();
@@ -150,6 +153,9 @@ impl Engine {
 struct Shutdown {
     remaining: AtomicUsize,
     handles: Mutex<Vec<Arc<BlockingClient>>>,
+    /// Reached only by the single worker whose decrement hits zero, so it never contends. The
+    /// `Mutex` is here only to get interior mutability for the `take` through the shared `Arc`,
+    /// not to guard against a race.
     reply: Mutex<Option<oneshot::Sender<Result<()>>>>,
 }
 
@@ -173,14 +179,15 @@ impl Shutdown {
 
         let mut handles = std::mem::take(&mut *lock(&self.handles));
         let last = handles.pop();
-        // Every handle but the survivor goes first, so the unwrap below meets a count of one.
+        // Every handle but the survivor goes first, so the `into_inner` below meets a count of
+        // one.
         drop(handles);
-        let result = match last.map(Arc::try_unwrap) {
-            Some(Ok(client)) => client.close(),
+        let result = match last.and_then(Arc::into_inner) {
+            Some(client) => client.close(),
             // Unreachable while workers are the only holders of engine handles, which they
             // are; answered rather than unwrapped so a future holder is a wrong error, not
             // an abort.
-            _ => Err(Error::Closed),
+            None => Err(Error::Closed),
         };
         if let Some(reply) = lock(&self.reply).take() {
             let _ = reply.send(result);
@@ -194,7 +201,13 @@ fn serve(client: Arc<BlockingClient>, queue: Arc<Mutex<mpsc::Receiver<Job>>>) {
         // receiver before running it, so the queue is shared and the commands are not.
         let job = lock(&queue).recv();
         match job {
-            Ok(Job::Run(operation)) => operation(&client),
+            // Caught so that a panicking command fails only that command -- its reply channel
+            // drops, which the awaiting caller sees as an error -- rather than unwinding this
+            // worker out of the pool, which would leave `close` one `retire` short and hang it
+            // forever. The client is behind the FFI's own locks, so proceeding is sound.
+            Ok(Job::Run(operation)) => {
+                let _ = catch_unwind(AssertUnwindSafe(|| operation(&client)));
+            }
             Ok(Job::Stop(shutdown)) => {
                 shutdown.retire(client);
                 return;

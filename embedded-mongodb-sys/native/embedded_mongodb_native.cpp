@@ -73,8 +73,12 @@ struct embedded_mongodb_handle {
                             const embedded_mongodb::ResolvedOptions& options)
         : runtime(std::make_shared<embedded_mongodb::Runtime>(std::move(path), options)) {}
 
-    // Shared so a session cannot outlive the runtime object it holds a client of. Closing the
-    // handle still tears the engine down; the shared pointer only rules out a dangling one.
+    // Shared with every session so the Runtime *object* is never freed under one: a command on
+    // a session whose handle has been closed then reads a null ServiceContext and fails
+    // cleanly, rather than dereferencing freed memory. It does not keep the engine *running* --
+    // `close` still tears the ServiceContext down -- so a session destroyed after that close
+    // would still touch a dead service. Nothing here prevents that; the Rust layer does, by
+    // holding an Arc on the runtime in every session so the handle cannot close while one lives.
     std::shared_ptr<embedded_mongodb::Runtime> runtime;
 };
 

@@ -127,8 +127,9 @@ void applyOptions(const ResolvedOptions& options) {
     //
     // Its documented 256 MB minimum is reached only on the branch that computes a size from
     // system memory, i.e. only when nothing was asked for. A caller who asks for less than
-    // 256 MB silently gets less, down to WiredTiger's own 1 MB floor, which is why the range
-    // check above is this library's job rather than MongoDB's.
+    // 256 MB silently gets less, down to WiredTiger's own 1 MB floor, which is why keeping the
+    // request inside WiredTiger's range is this library's job rather than MongoDB's -- a job
+    // the Rust `CacheSize` newtype does before the value ever reaches here.
     mongo::wiredTigerGlobalOptions.cacheSizeGB = options.cacheSizeMB / 1024.0;
     mongo::wiredTigerGlobalOptions.engineConfig = options.wiredTigerJournalConfig();
 

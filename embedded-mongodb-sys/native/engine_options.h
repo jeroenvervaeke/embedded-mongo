@@ -7,9 +7,11 @@
 
 namespace embedded_mongodb {
 
-/// One `embedded_mongodb_open_options` with every zero replaced by this library's default and
-/// every value checked against what WiredTiger will accept. Nothing downstream of
-/// `resolveOptions` has to think about the caller's struct again.
+/// One `embedded_mongodb_open_options` with every zero replaced by this library's default.
+/// Numeric ranges are not re-checked here: the sole caller of this ABI is this project's Rust
+/// crate, which validates each value against WiredTiger's bounds before building it (the
+/// newtypes in `options.rs`). Nothing downstream of `resolveOptions` has to think about the
+/// caller's struct again.
 struct ResolvedOptions {
     std::uint32_t cacheSizeMB;
     std::uint32_t journalFileMaxKB;
@@ -20,8 +22,9 @@ struct ResolvedOptions {
     std::string wiredTigerJournalConfig() const;
 };
 
-/// Throws `mongo::DBException` if a field this library understands is outside the range
-/// WiredTiger accepts, so a bad value is a failed open rather than a failed write later.
+/// Fills defaults and maps the journal-prealloc tri-state; throws `mongo::DBException` only if
+/// that enum field holds a value outside its three cases. Numeric ranges are the Rust caller's
+/// to enforce (see above).
 ///
 /// `options` may be null, and `options->size` may describe a struct shorter than this build's:
 /// see the contract on `embedded_mongodb_open_options`.
