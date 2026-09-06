@@ -83,6 +83,23 @@ class EmbeddedMongoClientTest(unittest.TestCase):
                 items.delete_one({"_id": 2})
                 self.assertEqual(1, items.count_documents({}))
 
+    def test_a_constructor_that_fails_closes_the_engine_it_opened(self):
+        """The engine is opened before PyMongo is, so a constructor that then fails is holding
+        the process's one runtime with nothing left to reach it.
+
+        The cost is paid by whatever opens next rather than by the caller who made the mistake:
+        the traceback names a bad option, and every later client is refused for a reason that
+        has nothing to do with it.
+        """
+        with scratch() as directory:
+            with self.assertRaises(Exception) as failed:
+                MongoClient(f"mongodb_embedded://{directory}", maxPoolSize=-1)
+            self.assertNotIsInstance(failed.exception, RuntimeError)
+
+            # The proof: this is refused if the failed constructor kept the runtime.
+            with MongoClient(f"mongodb_embedded://{directory}") as after:
+                self.assertEqual(1.0, after.admin.command("ping")["ok"])
+
     def test_repairs_a_directory_an_older_build_damaged(self):
         """Opening goes through `embedded_mongodb::Client`, so the one-time index repair pass
         runs here too.

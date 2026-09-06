@@ -1,14 +1,17 @@
 """The async client answers the same URIs and runs the same commands as the synchronous one.
 
-Parity rather than novelty: everything here has a counterpart in test_embedded.py, and the
-point of running it twice is that the two surfaces share a URI parser and a handshake but not
-a pool, a connection or a client -- so only exercising both proves the async half is wired to
-the same engine.
+The two surfaces share a URI parser and a handshake and nothing else -- not a pool, not a
+connection, not a client -- so the CRUD here is deliberately the same as test_embedded.py's,
+and running it twice is what proves the async half is wired to the same engine.
+
+The rest is particular to this client: what a cursor does across batches when every `getMore`
+is its own await, what closing gives back, and what happens to a constructor that opened an
+engine and then failed.
 """
 
 import unittest
 
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, InvalidOperation
 from support import scratch
 
 from pymongo_embedded import AsyncMongoClient, MongoClient
@@ -95,6 +98,46 @@ class AsyncEmbeddedMongoClientTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(1.0, (await local.admin.command("ping"))["ok"])
             finally:
                 await local.close()
+
+    async def test_a_constructor_that_fails_closes_the_engine_it_opened(self):
+        """The engine is opened before PyMongo is, so a constructor that then fails is holding
+        the process's one runtime with nothing left to reach it.
+
+        Nothing else can open an engine until that is given back, which makes this the failure
+        that costs the most and shows the least: the traceback names a bad option, and every
+        later client is refused for a reason that has nothing to do with it.
+        """
+        with scratch() as directory:
+            with self.assertRaises(Exception) as failed:
+                AsyncMongoClient(f"mongodb_embedded://{directory}", maxPoolSize=-1)
+            self.assertNotIsInstance(failed.exception, RuntimeError)
+
+            # The proof: this is refused if the failed constructor kept the runtime.
+            after = AsyncMongoClient(f"mongodb_embedded://{directory}")
+            try:
+                self.assertEqual(1.0, (await after.admin.command("ping"))["ok"])
+            finally:
+                await after.close()
+
+    async def test_a_port_or_a_pool_class_is_refused(self):
+        """Both are meaningless against a directory, and both would otherwise be ignored -- a
+        port silently, a pool class by quietly replacing the one thing that reaches the engine.
+        """
+        with scratch() as directory:
+            uri = f"mongodb_embedded://{directory}"
+            with self.assertRaises(TypeError):
+                AsyncMongoClient(uri, 27017)
+            with self.assertRaises(TypeError):
+                AsyncMongoClient(uri, _pool_class=object)
+
+    async def test_a_closed_client_refuses_further_commands(self):
+        with scratch() as directory:
+            client = AsyncMongoClient(f"mongodb_embedded://{directory}")
+            await client.close()
+            with self.assertRaises(InvalidOperation):
+                await client.admin.command("ping")
+            # Closing twice is what a `try`/`finally` around an explicit close does.
+            await client.close()
 
 
 if __name__ == "__main__":

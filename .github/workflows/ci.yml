@@ -173,7 +173,7 @@ jobs:
           # is already fixed by the machine that built it.
           pip install 'maturin[patchelf]>=1.9,<2'
           maturin build --release --out wheels
-      - name: Check the engine was vendored into the wheel
+      - name: Check the wheel carries the engine and both client surfaces
         run: |
           set -euo pipefail
           # Not `pip install`: this package is not distributed on PyPI and is not installed
@@ -182,12 +182,28 @@ jobs:
           # here would resolve some other PyMongo from PyPI and fail on a difference that
           # says nothing about this repository.
           #
-          # What is worth checking is that the engine ended up inside the wheel, which is the
-          # part the prebuilt pipeline is responsible for. auditwheel vendors into .libs on
-          # Linux, delocate into .dylibs on macOS, so the pattern has to cover both.
+          # What can be checked without one is what the wheel contains. The engine is the part
+          # the prebuilt pipeline is responsible for -- auditwheel vendors it into .libs on
+          # Linux and delocate into .dylibs on macOS, so the pattern covers both.
           wheel=$(ls wheels/*.whl)
-          python -m zipfile -l "$wheel" | grep -E 'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
-            || { echo "the wheel does not carry the engine:" >&2; python -m zipfile -l "$wheel" >&2; exit 1; }
+          contents=$(python -m zipfile -l "$wheel")
+          # Every path the package is made of, checked by name. The engine is what this
+          # pipeline owns; the modules are here because `python-source` ships whatever it
+          # finds, so a subpackage that stopped being packaged would fail nothing else --
+          # the tests that would notice need a PyMongo checkout and do not run in CI.
+          for required in \
+            'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
+            'pymongo_embedded/_native' \
+            'pymongo_embedded/client\.py' \
+            'pymongo_embedded/common\.py' \
+            'pymongo_embedded/pool\.py' \
+            'pymongo_embedded/asynchronous/client\.py' \
+            'pymongo_embedded/asynchronous/pool\.py'
+          do
+            printf '%s\n' "$contents" | grep -qE "$required" \
+              || { echo "::error::the wheel is missing $required"; printf '%s\n' "$contents" >&2; exit 1; }
+          done
+          echo "the wheel carries the engine and both client surfaces"
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.runner }}

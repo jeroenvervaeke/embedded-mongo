@@ -35,6 +35,31 @@ _HELLO = {
 }
 
 
+class Socket:
+    """What a connection's networking interface wraps, for a connection that has no socket.
+
+    PyMongo reaches through to set a timeout on it; there is nothing to set one on, and no
+    round trip that could exceed it -- the command is over before `send_message` returns.
+    """
+
+    def settimeout(self, timeout: float | None) -> None:
+        pass
+
+
+def too_large(size: int, maximum: int) -> str:
+    return f"BSON document too large ({size} bytes); maximum is {maximum} bytes"
+
+
+# Both pools raise these, and a wording that drifted between them would make the same fault
+# read as two different ones depending on which client hit it.
+PENDING_ALREADY = "embedded connection already has a pending response"
+PENDING_MISSING = "embedded connection has no pending response"
+
+
+def mismatched(response_to: int, request_id: int) -> str:
+    return f"response id {response_to} does not match request id {request_id}"
+
+
 def path_from_uri(uri: object) -> str | None:
     """The database directory an embedded URI names, or `None` if this is not an embedded URI.
 

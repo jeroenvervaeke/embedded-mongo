@@ -14,17 +14,19 @@
 
 use crate::wait::block_on;
 use crate::wire;
-use embedded_mongodb::{Client, CommandStrands, OpenOptions};
+use embedded_mongodb::Client;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::RwLock;
 
 /// The engine behind every connection an async PyMongo pool hands out.
 ///
-/// `tokio`'s lock rather than the standard library's, for the reason the sync binding takes a
-/// read guard at all: a command holds this across an await, and a lock that parks the thread
-/// would park the event loop with it. The shape is otherwise identical -- a read guard per
-/// command so they run in parallel, the write guard only to close.
+/// `tokio`'s lock rather than the standard library's, and not only because a lock that parks
+/// the thread would park the event loop with it: a command holds the guard across an await,
+/// `std::sync::RwLockReadGuard` is `!Send`, and pyo3 requires a coroutine's future to be `Send`
+/// -- so the standard library's lock would not compile here at all. The shape is otherwise what
+/// the synchronous binding settled on: a read guard per command so they run in parallel, the
+/// write guard only to close.
 ///
 /// Poison does not arise: a `tokio::sync::RwLock` has no poisoning, so unlike its synchronous
 /// counterpart there is nothing here to recover from.
@@ -43,16 +45,9 @@ impl AsyncNativeClient {
     /// ever does, and there is no version of it that an event loop should be running. The
     /// interpreter is released for the whole of it, so other threads carry on.
     #[new]
-    #[pyo3(signature = (path, command_strands=None))]
-    fn new(py: Python<'_>, path: &str, command_strands: Option<u32>) -> PyResult<Self> {
-        let mut options = OpenOptions::new();
-        if let Some(count) = command_strands {
-            let strands = CommandStrands::from_count(count)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
-            options = options.command_strands(strands);
-        }
+    fn new(py: Python<'_>, path: &str) -> PyResult<Self> {
         let client = py
-            .detach(|| block_on(Client::with_options(path, options)))
+            .detach(|| block_on(Client::new(path)))
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         Ok(Self {
             inner: RwLock::new(Some(client)),

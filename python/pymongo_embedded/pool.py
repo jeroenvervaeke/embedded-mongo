@@ -10,17 +10,19 @@ from pymongo.pool_shared import _CancellationContext
 from pymongo.synchronous.pool import Connection, Pool
 
 from ._native import NativeClient
-from .common import describe
-
-
-class _Socket:
-    def settimeout(self, timeout: float | None) -> None:
-        pass
+from .common import (
+    PENDING_ALREADY,
+    PENDING_MISSING,
+    Socket,
+    describe,
+    mismatched,
+    too_large,
+)
 
 
 class _Interface:
     def __init__(self) -> None:
-        self.get_conn = _Socket()
+        self.get_conn = Socket()
 
     def close(self) -> None:
         pass
@@ -44,12 +46,9 @@ class EmbeddedConnection(Connection):
 
     def send_message(self, message: bytes, max_doc_size: int) -> None:
         if max_doc_size > self.max_bson_size:
-            raise DocumentTooLarge(
-                f"BSON document too large ({max_doc_size} bytes); maximum is "
-                f"{self.max_bson_size} bytes"
-            )
+            raise DocumentTooLarge(too_large(max_doc_size, self.max_bson_size))
         if self._pending is not None:
-            raise ProtocolError("embedded connection already has a pending response")
+            raise ProtocolError(PENDING_ALREADY)
         try:
             request_id, more_to_come, response = self._runtime.round_trip(message)
             if not more_to_come:
@@ -61,12 +60,10 @@ class EmbeddedConnection(Connection):
         try:
             pending, self._pending = self._pending, None
             if pending is None:
-                raise ProtocolError("embedded connection has no pending response")
+                raise ProtocolError(PENDING_MISSING)
             response_to, response = pending
             if request_id is not None and request_id != response_to:
-                raise ProtocolError(
-                    f"response id {response_to} does not match request id {request_id}"
-                )
+                raise ProtocolError(mismatched(response_to, request_id))
             return response
         except BaseException as error:
             self._raise_connection_failure(error)
