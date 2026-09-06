@@ -2,30 +2,13 @@ from __future__ import annotations
 
 from functools import partial
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote
 
-import pymongo
 from pymongo import MongoClient as _MongoClient
+
+from .common import path_from_uri
 
 if TYPE_CHECKING:
     from ._native import NativeClient
-
-_SCHEMES = ("mongodb+embedded://", "mongodb_embedded://")
-
-if pymongo.version_tuple[:2] != (4, 18):
-    raise ImportError("pymongo-embedded 0.1 requires PyMongo 4.18.x")
-
-
-def _path(uri: object) -> str | None:
-    if not isinstance(uri, str):
-        return None
-    for scheme in _SCHEMES:
-        if uri.startswith(scheme):
-            path = uri[len(scheme) :]
-            if not path or "?" in path or "#" in path:
-                raise ValueError("embedded MongoDB URI must contain only a database directory")
-            return unquote(path)
-    return None
 
 
 class MongoClient(_MongoClient):
@@ -40,7 +23,7 @@ class MongoClient(_MongoClient):
         **kwargs: Any,
     ) -> None:
         self._embedded_runtime: NativeClient | None = None
-        path = _path(host)
+        path = path_from_uri(host)
         if path is None:
             super().__init__(
                 host, port, document_class, tz_aware, connect, type_registry, **kwargs

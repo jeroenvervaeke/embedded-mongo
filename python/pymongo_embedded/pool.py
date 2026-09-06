@@ -2,13 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pymongo.common import (
-    MAX_BSON_SIZE,
-    MAX_MESSAGE_SIZE,
-    MAX_SUPPORTED_WIRE_VERSION,
-    MAX_WRITE_BATCH_SIZE,
-    MIN_SUPPORTED_WIRE_VERSION,
-)
 from pymongo.errors import DocumentTooLarge, ProtocolError
 from pymongo.hello import Hello
 from pymongo.message import _OpMsg
@@ -17,17 +10,7 @@ from pymongo.pool_shared import _CancellationContext
 from pymongo.synchronous.pool import Connection, Pool
 
 from ._native import NativeClient
-
-_HELLO = {
-    "ok": 1.0,
-    "ismaster": True,
-    "isWritablePrimary": True,
-    "minWireVersion": MIN_SUPPORTED_WIRE_VERSION,
-    "maxWireVersion": MAX_SUPPORTED_WIRE_VERSION,
-    "maxBsonObjectSize": MAX_BSON_SIZE,
-    "maxMessageSizeBytes": MAX_MESSAGE_SIZE,
-    "maxWriteBatchSize": MAX_WRITE_BATCH_SIZE,
-}
+from .common import describe
 
 
 class _Socket:
@@ -57,21 +40,7 @@ class EmbeddedConnection(Connection):
         self._pending: tuple[int, _OpMsg] | None = None
 
     def _hello(self, topology_version: Any, heartbeat_frequency: Any) -> Hello:
-        hello = Hello(_HELLO)
-        self.performed_handshake = True
-        self.is_writable = hello.is_writable
-        self.max_wire_version = hello.max_wire_version
-        self.max_bson_size = hello.max_bson_size
-        self.max_message_size = hello.max_message_size
-        self.max_write_batch_size = hello.max_write_batch_size
-        self.supports_sessions = False
-        self.logical_session_timeout_minutes = None
-        self.hello_ok = False
-        self.is_repl = False
-        self.is_standalone = True
-        self.is_mongos = False
-        self.server_connection_id = 0
-        return hello
+        return describe(self)
 
     def send_message(self, message: bytes, max_doc_size: int) -> None:
         if max_doc_size > self.max_bson_size:
