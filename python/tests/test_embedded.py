@@ -1,11 +1,11 @@
 import gzip
 import os
 import shutil
-import tempfile
 import unittest
 from pathlib import Path
 
 from pymongo.errors import DuplicateKeyError
+from support import scratch
 
 from pymongo_embedded import MongoClient
 
@@ -43,18 +43,6 @@ def _skip_hint():
     return f" ({_SKIP_VARIABLE}={value} is set in the environment, which suppresses the pass)"
 
 
-def _scratch():
-    """A temporary directory under `target`, never the system one.
-
-    /tmp is a memory filesystem on a good many Linux machines, and the engine preallocates a
-    couple of hundred megabytes of WiredTiger journal for every data directory it opens,
-    however few documents go in.
-    """
-    base = _REPO_ROOT / "target" / "tmp"
-    base.mkdir(parents=True, exist_ok=True)
-    return tempfile.TemporaryDirectory(dir=base)
-
-
 def _unpack_damaged(path):
     """Unpacks the damaged directory into `path`, which must not exist yet."""
     path.mkdir(parents=True)
@@ -78,7 +66,7 @@ class EmbeddedMongoClientTest(unittest.TestCase):
         self.assertIsNone(remote._embedded_runtime)
         remote.close()
 
-        with _scratch() as directory:
+        with scratch() as directory:
             with MongoClient(f"mongodb_embedded://{directory}") as local:
                 items = local.test.items
                 self.assertEqual(1.0, local.admin.command("ping")["ok"])
@@ -103,8 +91,8 @@ class EmbeddedMongoClientTest(unittest.TestCase):
         pointed at a directory some earlier build wrote is one of the two consumers likeliest
         to hold that damage. Every reading below is one that changes when the pass is skipped.
         """
-        with _scratch() as scratch:
-            damaged = Path(scratch) / "damaged"
+        with scratch() as directory:
+            damaged = Path(directory) / "damaged"
             _unpack_damaged(damaged)
 
             with MongoClient(f"mongodb_embedded://{damaged}") as local:
