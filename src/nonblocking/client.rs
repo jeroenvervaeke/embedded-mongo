@@ -7,6 +7,26 @@ use std::path::Path;
 /// directory format, same one-runtime-per-process rule, with every command dispatched to a
 /// worker thread so an `await` parks a task rather than a runtime thread.
 ///
+/// # What runs where
+///
+/// Every call into the engine -- and with it the BSON encode of the request and the decode of
+/// the reply -- happens on a worker thread, never on the runtime. An `.await` here parks a
+/// task on a oneshot and nothing else. The one piece of per-document work that does land on
+/// the caller's task is deserialising a cursor's documents into `T`, in
+/// [`Cursor::next`](crate::Cursor::next): the batch is already in memory by then, and doing it
+/// on the task is what lets `T` stay free of a `Send` bound.
+///
+/// # Cancellation
+///
+/// A command in flight cannot be cancelled: the engine's entry point is a blocking call with
+/// no cancellation of its own, so once a worker has picked a command up it runs to completion.
+/// Dropping the future -- including by `tokio::time::timeout` -- abandons the *answer*, not the
+/// work, and frees the session only when the command actually finishes. A timeout therefore
+/// bounds how long you wait, never how long the engine works.
+///
+/// Nothing is lost or corrupted by dropping one: the reply is discarded, the session returns to
+/// the pool, and the worker takes the next job.
+///
 /// Commands run in parallel up to the session-pool size --
 /// [`OpenOptions::command_strands`], eight unless asked otherwise -- because there is one
 /// worker thread per session, each holding its session for the length of a command. A `Client`
