@@ -176,21 +176,12 @@ jobs:
       - name: Check the wheel carries the engine and both client surfaces
         run: |
           set -euo pipefail
-          # Not `pip install`: this package is not distributed on PyPI and is not installed
-          # from it. It needs PyMongo 4.18, which exists only as a mongo-python-driver
-          # checkout -- ./scripts/python is the supported way to run it. Installing the wheel
-          # here would resolve some other PyMongo from PyPI and fail on a difference that
-          # says nothing about this repository.
-          #
-          # What can be checked without one is what the wheel contains. The engine is the part
-          # the prebuilt pipeline is responsible for -- auditwheel vendors it into .libs on
-          # Linux and delocate into .dylibs on macOS, so the pattern covers both.
+          # The engine is the part the prebuilt pipeline is responsible for -- auditwheel
+          # vendors it into .libs on Linux and delocate into .dylibs on macOS, so the pattern
+          # covers both. The modules are here because `python-source` ships whatever it finds,
+          # so a subpackage that stopped being packaged would otherwise fail nothing.
           wheel=$(ls wheels/*.whl)
           contents=$(python -m zipfile -l "$wheel")
-          # Every path the package is made of, checked by name. The engine is what this
-          # pipeline owns; the modules are here because `python-source` ships whatever it
-          # finds, so a subpackage that stopped being packaged would fail nothing else --
-          # the tests that would notice need a PyMongo checkout and do not run in CI.
           for required in \
             'pymongo_embedded\.(dy)?libs/.*libembedded_mongodb_native' \
             'pymongo_embedded/_native' \
@@ -204,6 +195,24 @@ jobs:
               || { echo "::error::the wheel is missing $required"; printf '%s\n' "$contents" >&2; exit 1; }
           done
           echo "the wheel carries the engine and both client surfaces"
+
+      # Installed from the wheel this job just built, with PyMongo resolved from PyPI, so what
+      # runs is what a user would get rather than the working tree. `pymongo-embedded` itself
+      # is still not published; only its dependency is.
+      - name: Install the wheel
+        run: |
+          set -euo pipefail
+          pip install "$(ls wheels/*.whl)"
+          python -c 'import pymongo; print("pymongo", pymongo.version)'
+
+      # `test_*.py` only. `measure_*.py` beside them assert on wall-clock ratios -- speedups,
+      # how much of the interpreter another thread got -- which say something about a machine
+      # with cores to spare and nothing dependable about a shared runner. They are run by hand;
+      # see the README. What runs here is the behaviour: CRUD and cursors through both clients,
+      # close and reopen, the constructor's own failure path, and the one-engine-per-process
+      # rule. Enough that an async client which stopped working could not reach master.
+      - name: Run the binding's tests against the installed wheel
+        run: python -m unittest discover -v -s python/tests -p 'test_*.py'
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.runner }}

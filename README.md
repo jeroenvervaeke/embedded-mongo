@@ -317,11 +317,18 @@ sibling `mongo-python-driver` checkout. It also accepts normal Python arguments:
 ./scripts/python -m pip install another-package
 ```
 
-Set `PYMONGO_SOURCE` if the PyMongo checkout is elsewhere. The binding's own tests run through
-the same runner, and are not part of CI because they need that checkout:
+Set `PYMONGO_SOURCE` if the PyMongo checkout is elsewhere.
+
+The binding's tests come in two kinds. `test_*.py` are behaviour -- CRUD and cursors through
+both clients, close and reopen, the one-engine-per-process rule -- and CI runs them against the
+wheel it builds. `measure_*.py` assert on wall-clock ratios instead: how much faster eight
+commands are than one, how much of the interpreter another thread got while a close waited,
+whether a cancelled task really freed its session. Those want a machine with cores to spare, so
+they are run by hand:
 
 ```sh
-./scripts/python -m unittest discover -s python/tests
+./scripts/python -m unittest discover -s python/tests -p 'test_*.py'
+./scripts/python -m unittest discover -s python/tests -p 'measure_*.py'
 ```
 
 To build a distributable wheel containing the native engine:
@@ -335,9 +342,10 @@ python -m pip install target/wheels/pymongo_embedded-*.whl
 The first build downloads the published engine; see [Build and test](#build-and-test) for the
 alternatives.
 
-This package is not published to PyPI and is not installed from it. It is developed against a
-`mongo-python-driver` checkout, which `./scripts/python` wires up for you; the wheel exists so
-the engine can be vendored into one, not as a distribution.
+This package is not published to PyPI. The wheel exists so the engine can be vendored into one,
+not as a distribution -- but it does install, and CI installs it: PyMongo 4.18 is on PyPI, so
+nothing but `pymongo-embedded` itself is missing from there. `./scripts/python` wires up a
+`mongo-python-driver` checkout instead, which is what you want while changing the binding.
 
 The binding supports PyMongo 4.18 commands through both clients, including normal CRUD, cursors,
 aggregations, and bulk document sequences. Authentication, TLS, compression, sessions,

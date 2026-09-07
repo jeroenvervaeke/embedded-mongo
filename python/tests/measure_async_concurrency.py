@@ -39,7 +39,7 @@ SLOW_STEPS = 6000
 LEAD = 0.2
 
 
-class AsyncConcurrencyTest(unittest.IsolatedAsyncioTestCase):
+class AsyncConcurrencyMeasurement(unittest.IsolatedAsyncioTestCase):
     async def test_tasks_run_commands_in_parallel(self):
         cores = os.cpu_count() or 1
         if cores < COMMANDS:

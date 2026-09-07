@@ -35,7 +35,7 @@ LEAD = 0.2
 JOIN_SECONDS = 120
 
 
-class CloseTest(unittest.TestCase):
+class CloseMeasurement(unittest.TestCase):
     def test_closing_waits_for_a_command_without_holding_the_interpreter(self):
         """A close issued while another thread's command runs waits for it, and waits with the
         interpreter released.

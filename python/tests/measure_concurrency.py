@@ -33,7 +33,7 @@ DOCUMENTS = 1500
 STEPS = 1200
 
 
-class ThreadConcurrencyTest(unittest.TestCase):
+class ThreadConcurrencyMeasurement(unittest.TestCase):
     def test_threads_run_commands_in_parallel(self):
         cores = os.cpu_count() or 1
         if cores < COMMANDS:

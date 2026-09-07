@@ -36,7 +36,7 @@ STEPS = 6000
 PATIENCE = 0.3
 
 
-class AsyncCancellationTest(unittest.IsolatedAsyncioTestCase):
+class AsyncCancellationMeasurement(unittest.IsolatedAsyncioTestCase):
     async def test_cancelling_the_tasks_frees_their_sessions(self):
         with scratch() as directory:
             client = AsyncMongoClient(
