@@ -46,6 +46,9 @@
     "@0q/embedded-mongodb-linux-arm64-gnu": "0.1.0",
     "@0q/embedded-mongodb-darwin-arm64": "0.1.0"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@napi-rs/cli": "^3.9.0",
     "mongodb": "^7.5.0"
