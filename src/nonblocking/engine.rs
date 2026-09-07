@@ -5,10 +5,9 @@ use super::shutdown::{Shutdown, lock};
 use crate::{
     Concurrency, Error, OpenOptions, Result, client::Client as BlockingClient, pool::CommandSlot,
 };
-use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::Instant;
 use tokio::sync::oneshot;
 
@@ -19,26 +18,22 @@ enum Job {
     Stop(Arc<Shutdown>),
 }
 
+/// Only caller handles own senders. Dropping the last one disconnects the channel, so
+/// workers drain accepted jobs and exit using the standard channel's existing drop behavior.
 #[derive(Clone)]
 pub(super) struct Engine {
-    handle: Arc<Handle>,
-}
-
-/// Workers own the pool, but only callers own this handle. Dropping the last caller wakes
-/// idle workers to drain accepted work and leave, without keeping the engine alive in a cycle.
-struct Handle {
+    jobs: mpsc::Sender<Job>,
     pool: Arc<WorkerPool>,
 }
 
 struct WorkerPool {
     state: Mutex<WorkerState>,
-    available: Condvar,
+    queue: Mutex<mpsc::Receiver<Job>>,
     concurrency: Concurrency,
     client: Weak<BlockingClient>,
 }
 
 struct WorkerState {
-    jobs: VecDeque<Job>,
     workers: usize,
     /// Queued plus running commands, so dispatch can grow before a busy worker receives again.
     pending: usize,
@@ -49,6 +44,7 @@ impl Engine {
     /// Storage startup and the repair pass stay on the first worker, off the async runtime.
     pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<Self> {
         let concurrency = OpenOptions::concurrency_policy(options.as_ref())?;
+        let (jobs, queue) = mpsc::channel();
         let (ready, opened) = oneshot::channel();
         let span = tracing::Span::current();
         std::thread::Builder::new()
@@ -63,12 +59,11 @@ impl Engine {
                 };
                 let pool = Arc::new(WorkerPool {
                     state: Mutex::new(WorkerState {
-                        jobs: VecDeque::new(),
                         workers: 1,
                         pending: 0,
                         closing: false,
                     }),
-                    available: Condvar::new(),
+                    queue: Mutex::new(queue),
                     concurrency,
                     client: Arc::downgrade(&client),
                 });
@@ -78,28 +73,24 @@ impl Engine {
                         pool.spawn_worker(&mut state, &client);
                     }
                 }
-                let engine = Self {
-                    handle: Arc::new(Handle {
-                        pool: Arc::clone(&pool),
-                    }),
-                };
-                // If opening was abandoned, dropping the unsent handle wakes the helpers.
-                if ready.send(Ok(engine)).is_err() {
+                // An abandoned open drops the sender; helpers drain the disconnected channel.
+                if ready.send(Ok(Arc::clone(&pool))).is_err() {
                     return;
                 }
                 serve(client, pool);
             })
             .map_err(Error::EngineThread)?;
-        opened.await.map_err(|_| Error::Closed)?
+        let pool = opened.await.map_err(|_| Error::Closed)??;
+        Ok(Self { jobs, pool })
     }
 
     fn dispatch(&self, job: Job) -> Result<()> {
-        let pool = &self.handle.pool;
+        let pool = &self.pool;
         let mut state = lock(&pool.state);
         if state.closing {
             return Err(Error::Closed);
         }
-        state.jobs.push_back(job);
+        self.jobs.send(job).map_err(|_| Error::Closed)?;
         state.pending += 1;
         if state.pending > state.workers
             && state.workers < pool.concurrency.max() as usize
@@ -107,7 +98,6 @@ impl Engine {
         {
             pool.spawn_worker(&mut state, &client);
         }
-        pool.available.notify_one();
         Ok(())
     }
 
@@ -176,7 +166,7 @@ impl Engine {
     pub(super) async fn close(&self) -> Result<()> {
         let (reply, closed) = oneshot::channel();
         {
-            let pool = &self.handle.pool;
+            let pool = &self.pool;
             let mut state = lock(&pool.state);
             if state.closing {
                 return Err(Error::Closed);
@@ -184,18 +174,12 @@ impl Engine {
             state.closing = true;
             let shutdown = Arc::new(Shutdown::new(state.workers, reply));
             for _ in 0..state.workers {
-                state.jobs.push_back(Job::Stop(Arc::clone(&shutdown)));
+                self.jobs
+                    .send(Job::Stop(Arc::clone(&shutdown)))
+                    .map_err(|_| Error::Closed)?;
             }
-            pool.available.notify_all();
         }
         closed.await.map_err(|_| Error::Closed)?
-    }
-}
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        lock(&self.pool.state).closing = true;
-        self.pool.available.notify_all();
     }
 }
 
@@ -220,30 +204,19 @@ impl WorkerPool {
 
     fn next_job(&self) -> Option<Job> {
         let idle_since = Instant::now();
-        let mut state = lock(&self.state);
-        loop {
-            if let Some(job) = state.jobs.pop_front() {
-                return Some(job);
-            }
-            if state.closing {
-                return None;
-            }
-            state = match self.concurrency.idle_timeout() {
-                Some(timeout) => {
-                    let remaining = timeout.saturating_sub(idle_since.elapsed());
-                    if remaining.is_zero() {
-                        return Some(Job::Retire);
-                    }
-                    self.available
-                        .wait_timeout(state, remaining)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
+        // As before, serialize receiving, then release the queue for the whole command.
+        let queue = lock(&self.queue);
+        match self.concurrency.idle_timeout() {
+            Some(timeout) => {
+                // Time spent waiting for the receiver is idle time too. Without subtracting
+                // it, retiring N idle workers could take N complete timeout periods.
+                match queue.recv_timeout(timeout.saturating_sub(idle_since.elapsed())) {
+                    Ok(job) => Some(job),
+                    Err(mpsc::RecvTimeoutError::Timeout) => Some(Job::Retire),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => None,
                 }
-                None => self
-                    .available
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner),
-            };
+            }
+            None => queue.recv().ok(),
         }
     }
 }
@@ -269,7 +242,7 @@ fn serve(client: Arc<BlockingClient>, pool: Arc<WorkerPool>) {
                 client.reap_idle_sessions();
                 let mut state = lock(&pool.state);
                 if !state.closing
-                    && state.jobs.is_empty()
+                    && state.pending < state.workers
                     && state.workers > pool.concurrency.min() as usize
                 {
                     // Release the engine BEFORE counting out, under the shutdown lock. Close
@@ -304,7 +277,7 @@ mod tests {
     /// Block twice the ceiling's worth of jobs, proving that the queue grows the worker pool
     /// to max and that later jobs still wait there. Channels make this independent of query speed.
     fn saturate(engine: &Engine) -> (Vec<mpsc::Sender<()>>, Vec<oneshot::Receiver<()>>) {
-        let max = engine.handle.pool.concurrency.max();
+        let max = engine.pool.concurrency.max();
         let (started, running) = mpsc::channel();
         let mut releases = Vec::new();
         let mut replies = Vec::new();
@@ -334,7 +307,7 @@ mod tests {
             ),
             "workers exceeded max"
         );
-        assert_eq!(lock(&engine.handle.pool.state).workers, max as usize);
+        assert_eq!(lock(&engine.pool.state).workers, max as usize);
         (releases, replies)
     }
 
@@ -342,7 +315,7 @@ mod tests {
         tokio::time::timeout(PATIENCE, async {
             loop {
                 {
-                    let state = lock(&engine.handle.pool.state);
+                    let state = lock(&engine.pool.state);
                     if state.workers == workers as usize && state.pending == 0 {
                         break;
                     }
@@ -379,10 +352,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                assert_eq!(
-                    lock(&engine.handle.pool.state).workers,
-                    policy.min() as usize
-                );
+                assert_eq!(lock(&engine.pool.state).workers, policy.min() as usize);
                 for _ in 0..2 {
                     let (releases, replies) = saturate(&engine);
                     for release in releases {
@@ -440,7 +410,7 @@ mod tests {
                 .unwrap();
             let survivor = engine.clone();
             drop(engine);
-            assert!(!lock(&survivor.handle.pool.state).closing);
+            assert!(!lock(&survivor.pool.state).closing);
             let (releases, replies) = saturate(&survivor);
             drop(survivor);
             for release in releases {
