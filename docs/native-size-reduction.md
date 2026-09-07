@@ -361,11 +361,11 @@ WiredTiger 1.94 MB, both required. Reaching 25 MB now means removing database fe
 aggregation, the geo and text index types, timeseries — rather than infrastructure, which is a
 different kind of decision from everything above.
 
-## Two crashes this work found
+## Three crashes this work found
 
-Neither was caused by the size work; both predate it, and `tests/features.rs` covers them now.
-Both took the host process down with an fassert rather than returning an error, which is the
-worst failure mode a library embedded in someone else's application can have.
+None was caused by the size work; all predate it, and `tests/features.rs` covers them now.
+Each took the host process down rather than returning an error, which is the worst failure
+mode a library embedded in someone else's application can have.
 
 - **`explain`** reports server version information, and nothing had ever called
   `VersionInfoInterface::enable()`. mongod gets it from a static initializer in
@@ -376,6 +376,13 @@ worst failure mode a library embedded in someone else's application can have.
   handshake aborted; later ones succeeded because metadata is only recorded once.
   `patches/0002` guards the two logging sites in `client_metadata.cpp` and the one in
   `hello_auth.cpp`. This is what a driver sends first, so it hit the PyMongo bindings directly.
+- **`getParameter` with `featureCompatibilityVersion`** — reporting the FCV looks for its
+  on-disk document through `repl::StorageInterface::get(opCtx)`, which this engine never
+  installs (see `engine_recovery.cpp`), and mongod dereferences it unguarded. A null
+  dereference on an engine thread, so a segfault rather than an fassert, and `getParameter:
+  "*"` takes the same path. `patches/0009` makes the lookup report that there is no interface
+  to ask, and the parameter falls back to the in-memory FCV the engine started with. mongosh
+  asks this on every connection, which is how it was found.
 
 ## Publishing a build
 

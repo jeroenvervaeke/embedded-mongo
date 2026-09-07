@@ -1,0 +1,28 @@
+diff --git a/src/mongo/db/commands/feature_compatibility_version.cpp b/src/mongo/db/commands/feature_compatibility_version.cpp
+index a91213f90..0865abace 100644
+--- a/src/mongo/db/commands/feature_compatibility_version.cpp
++++ b/src/mongo/db/commands/feature_compatibility_version.cpp
+@@ -392,12 +392,22 @@ void runUpdateCommand(OperationContext* opCtx, const FeatureCompatibilityVersion
+ 
+ StatusWith<BSONObj> FeatureCompatibilityVersion::findFeatureCompatibilityVersionDocument(
+     OperationContext* opCtx) try {
++    // An embedded server installs no replication StorageInterface: it never replicates, and its
++    // startup recovery writes no FCV document for this to find. Reading the parameter has to say
++    // so rather than dereference the missing interface, which took the host process down on
++    // `getParameter: {featureCompatibilityVersion: 1}` -- one of the first things mongosh asks.
++    // The caller falls back to the in-memory FCV, which is the one the server was started with.
++    auto* storageInterface = repl::StorageInterface::get(opCtx);
++    if (!storageInterface) {
++        return {ErrorCodes::NoSuchKey,
++                "FCV document not read: this server has no replication storage interface"};
++    }
+     // FCV is initialized before catalog repair on startup (as index builds may care about FCV),
+     // which means that if we crash during initial sync there may be incomplete foreground index
+     // builds that stop us from loading the index catalog. As a result, we need to perform a
+     // collection scan instead of findById(). The collection also contains sharding configuration so
+     // there can be more than one document, but it should still be a very small number.
+-    auto result = repl::StorageInterface::get(opCtx)->findDocuments(
++    auto result = storageInterface->findDocuments(
+         opCtx,
+         NamespaceString::kServerConfigurationNamespace,
+         boost::none,
