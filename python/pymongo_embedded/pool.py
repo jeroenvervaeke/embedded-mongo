@@ -87,6 +87,11 @@ class EmbeddedPool(Pool):
         self._telemetry.connection_created(connection_id)
 
         connection = None
+        # Whether the handshake got through, which is what decides below whether the failure
+        # is one `_handle_connection_error` should be labelling. Tracked rather than inferred
+        # for the same reason the base class tracks it: an `is_sdam` pool performs no
+        # handshake, so "did it succeed" and "was there one" are different questions.
+        completed_hello = False
         try:
             connection = EmbeddedConnection(
                 self._runtime, self, self.address, connection_id, self.is_sdam
@@ -98,18 +103,18 @@ class EmbeddedPool(Pool):
                 connection.cancel_context.cancel()
             if not self.is_sdam:
                 connection.hello()
+                completed_hello = True
                 self.is_writable = connection.is_writable
             if handler:
                 handler.contribute_socket(connection, completed_handshake=False)
             connection.authenticate()
-            if handler:
-                handler.client._topology.receive_cluster_time(connection._cluster_time)
-            return connection
-        except BaseException:
+        except BaseException as error:
             with self.lock:
                 self.active_contexts.discard(temporary_context)
                 if connection is not None:
                     self.active_contexts.discard(connection.cancel_context)
+            if not completed_hello:
+                self._handle_connection_error(error)
             if connection is None:
                 self._telemetry.connection_closed(
                     connection_id, ConnectionClosedReason.ERROR
@@ -117,3 +122,10 @@ class EmbeddedPool(Pool):
             else:
                 connection.close_conn(ConnectionClosedReason.ERROR)
             raise
+
+        # Outside the `try`, as in the base class: a cluster time that failed to be gossiped
+        # is not a connection that failed to be made, and treating it as one would close a
+        # working connection and report it as a connection error.
+        if handler:
+            handler.client._topology.receive_cluster_time(connection._cluster_time)
+        return connection

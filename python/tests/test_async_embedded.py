@@ -10,11 +10,13 @@ engine and then failed.
 """
 
 import unittest
+from unittest import mock
 
-from pymongo.errors import DuplicateKeyError, InvalidOperation
+from pymongo.errors import AutoReconnect, DuplicateKeyError, InvalidOperation
 from support import scratch
 
 from pymongo_embedded import AsyncMongoClient, MongoClient
+from pymongo_embedded.asynchronous.pool import AsyncEmbeddedConnection, AsyncEmbeddedPool
 
 
 class AsyncEmbeddedMongoClientTest(unittest.IsolatedAsyncioTestCase):
@@ -138,6 +140,43 @@ class AsyncEmbeddedMongoClientTest(unittest.IsolatedAsyncioTestCase):
                 await client.admin.command("ping")
             # Closing twice is what a `try`/`finally` around an explicit close does.
             await client.close()
+
+    async def test_a_failed_handshake_goes_through_pymongos_own_error_handling(self):
+        """A connection that fails its handshake goes through the base class's own error handling.
+
+        There is no realistic way for this binding's handshake to fail -- it is a local
+        function returning a constant, with no socket to refuse it -- so what is worth
+        pinning is not the scenario but the wiring. `connect` is an override of PyMongo's,
+        and an override that quietly dropped a step of the contract would leave embedded
+        pools reporting failures differently from every other pool, with nothing to say so.
+        """
+        async def refuse(self):
+            raise AutoReconnect("handshake refused")
+
+        with scratch() as directory:
+            client = AsyncMongoClient(f"mongodb_embedded://{directory}")
+            try:
+                # Only `hello`, which is what `connect` calls. The monitor reaches for `_hello`
+                # and so keeps working, which is what lets the error reach this caller intact
+                # instead of being absorbed into a server-selection timeout.
+                with (
+                    mock.patch.object(AsyncEmbeddedConnection, "hello", refuse),
+                    mock.patch.object(
+                        AsyncEmbeddedPool,
+                        "_handle_connection_error",
+                        side_effect=AsyncEmbeddedPool._handle_connection_error,
+                        autospec=True,
+                    ) as handled,
+                ):
+                    with self.assertRaises(AutoReconnect):
+                        await client.admin.command("ping")
+                handled.assert_called_once()
+                self.assertTrue(
+                    handled.call_args.args[1].has_error_label("SystemOverloadedError"),
+                    "the handshake failure reached the base class but came back unlabelled",
+                )
+            finally:
+                await client.close()
 
 
 if __name__ == "__main__":

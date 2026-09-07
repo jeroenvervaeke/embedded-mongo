@@ -3,11 +3,13 @@ import os
 import shutil
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import AutoReconnect, DuplicateKeyError
 from support import scratch
 
 from pymongo_embedded import MongoClient
+from pymongo_embedded.pool import EmbeddedConnection, EmbeddedPool
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -99,6 +101,40 @@ class EmbeddedMongoClientTest(unittest.TestCase):
             # The proof: this is refused if the failed constructor kept the runtime.
             with MongoClient(f"mongodb_embedded://{directory}") as after:
                 self.assertEqual(1.0, after.admin.command("ping")["ok"])
+
+    def test_a_failed_handshake_goes_through_pymongos_own_error_handling(self):
+        """A connection that fails its handshake goes through the base class's own error handling.
+
+        There is no realistic way for this binding's handshake to fail -- it is a local
+        function returning a constant, with no socket to refuse it -- so what is worth
+        pinning is not the scenario but the wiring. `connect` is an override of PyMongo's,
+        and an override that quietly dropped a step of the contract would leave embedded
+        pools reporting failures differently from every other pool, with nothing to say so.
+        """
+        def refuse(self):
+            raise AutoReconnect("handshake refused")
+
+        with scratch() as directory:
+            with MongoClient(f"mongodb_embedded://{directory}") as client:
+                # Only `hello`, which is what `connect` calls. The monitor reaches for `_hello`
+                # and so keeps working, which is what lets the error reach this caller intact
+                # instead of being absorbed into a server-selection timeout.
+                with (
+                    mock.patch.object(EmbeddedConnection, "hello", refuse),
+                    mock.patch.object(
+                        EmbeddedPool,
+                        "_handle_connection_error",
+                        side_effect=EmbeddedPool._handle_connection_error,
+                        autospec=True,
+                    ) as handled,
+                ):
+                    with self.assertRaises(AutoReconnect):
+                        client.admin.command("ping")
+                handled.assert_called_once()
+                self.assertTrue(
+                    handled.call_args.args[1].has_error_label("SystemOverloadedError"),
+                    "the handshake failure reached the base class but came back unlabelled",
+                )
 
     def test_repairs_a_directory_an_older_build_damaged(self):
         """Opening goes through `embedded_mongodb::Client`, so the one-time index repair pass
