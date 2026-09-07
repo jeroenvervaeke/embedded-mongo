@@ -1,0 +1,28 @@
+{
+  "name": "@0q/embedded-mongodb-linux-x64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "embedded-mongodb.linux-x64-gnu.node",
+  "files": [
+    "embedded-mongodb.linux-x64-gnu.node",
+    "libembedded_mongodb_native.so"
+  ],
+  "description": "Run the MongoDB Node.js driver against an in-process embedded MongoDB engine",
+  "license": "SSPL-1.0",
+  "engines": {
+    "node": ">= 20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeroenvervaeke/embedded-mongo.git",
+    "directory": "embedded-mongodb-node"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

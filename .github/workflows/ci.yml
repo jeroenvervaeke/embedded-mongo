@@ -218,6 +218,58 @@ jobs:
           name: wheel-${{ matrix.runner }}
           path: wheels/*.whl
 
+  node:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      - name: Build the addon and put the engine beside it
+        working-directory: embedded-mongodb-node
+        # `npm run build` is napi-rs's cargo build plus scripts/bundle-engine.js, which copies
+        # the engine next to the addon here and into the platform package under npm/.
+        run: |
+          npm ci
+          npm run build
+      - name: Check the platform package carries the addon and the engine
+        working-directory: embedded-mongodb-node
+        run: |
+          set -euo pipefail
+          addon=$(ls embedded-mongodb.*.node)
+          platform=${addon#embedded-mongodb.}
+          platform=${platform%.node}
+          for required in "npm/$platform/$addon" "npm/$platform/libembedded_mongodb_native.so"; do
+            test -f "$required" || { echo "::error::the platform package is missing $required"; ls -R npm >&2; exit 1; }
+          done
+          echo "npm/$platform carries the addon and the engine"
+      # The behaviour: CRUD and cursors through the driver, the handshake the driver runs
+      # without sessions, unacknowledged writes, parallel connections, the one-engine-per-
+      # process rule, and the MongoClient class over both kinds of URI.
+      - name: Run the binding's tests
+        working-directory: embedded-mongodb-node
+        run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.runner }}
+          path: embedded-mongodb-node/npm/*/
+          if-no-files-found: error
+
   # The Android library is a Gradle build, so nothing above compiles a line of it: `test` cross
   # compiles the JNI crate, but the AAR, the ABIs it packages and the Kotlin wrapping the bridge
   # are built and tested only here.

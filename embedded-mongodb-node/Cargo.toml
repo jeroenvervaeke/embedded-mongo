@@ -1,0 +1,25 @@
+[package]
+name = "embedded-mongodb-node"
+version = "0.1.0"
+edition = "2024"
+license = "SSPL-1.0"
+publish = false
+
+[lib]
+name = "embedded_mongodb_node"
+crate-type = ["cdylib"]
+
+[dependencies]
+bson = "3.1.0"
+embedded-mongodb = { path = ".." }
+embedded-mongodb-wire = { path = "../embedded-mongodb-wire" }
+# `tokio_rt` is what lets `async fn` appear in a `#[napi]` impl: napi drives the future on its
+# own tokio runtime and settles a Promise from it. The engine's own workers do the blocking,
+# so the runtime only ever parks a task -- which is the whole reason the binding is async.
+napi = { version = "3", default-features = false, features = ["napi8", "tokio_rt"] }
+napi-derive = "3"
+# Its lock, not the standard library's: a command holds the read guard across an await.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+
+[build-dependencies]
+napi-build = "2"
