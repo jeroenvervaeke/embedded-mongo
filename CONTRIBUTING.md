@@ -174,11 +174,12 @@ what to use for a dry run.
 3. **verify** — re-tests the published artifacts on every target *through* the committed
    manifest, and builds the Python wheel to confirm the engine is vendored into it.
 
-The wheel is built but never installed. `pymongo-embedded` is not published to PyPI and needs
-PyMongo 4.18, which exists only as a `mongo-python-driver` checkout, so `pip install` would
-resolve some unrelated release and fail on a difference that says nothing about this
-repository. `./scripts/python` is how the binding is actually run; CI only checks the part
-this pipeline owns, which is that a wheel built against the published library contains it.
+The wheel is built, installed and tested. `pymongo-embedded` is not published to PyPI, but
+PyMongo 4.18 is, so the wheel resolves its one dependency from there and `ci.yml` runs the
+binding's behaviour tests against it -- what a user would install rather than the working tree.
+The `measure_*.py` tests beside them are not run there; they assert on wall-clock ratios and
+want a machine with cores to spare. `./scripts/python` runs either kind against a
+`mongo-python-driver` checkout, which is what you want while changing the binding.
 
 `prebuilt.rs` is `@generated`. Never edit it by hand; the generator recomputes every digest
 from the library itself rather than trusting the sidecar that came with it.

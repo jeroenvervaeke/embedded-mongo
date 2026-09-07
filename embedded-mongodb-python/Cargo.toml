@@ -12,4 +12,11 @@ crate-type = ["cdylib"]
 [dependencies]
 bson = "3.1.0"
 embedded-mongodb = { path = ".." }
-pyo3 = { version = "0.29.0", features = ["abi3-py39", "extension-module"] }
+# experimental-async is what lets `async fn` appear in #[pymethods], which is how the
+# asynchronous client hands the event loop a coroutine rather than a blocked thread. Still gated
+# in pyo3 0.29, so a pyo3 upgrade has to be read for changes to it before it is taken.
+pyo3 = { version = "0.29.0", features = ["abi3-py39", "experimental-async", "extension-module"] }
+# Its lock, not the standard library's: the asynchronous client holds one across an await, and a
+# lock that parked the thread would park the event loop with it. `sync` only -- this crate needs
+# no runtime, and the futures it awaits are driven by whatever executor Python is using.
+tokio = { version = "1", default-features = false, features = ["sync"] }

@@ -412,6 +412,7 @@ dependencies = [
  "bson",
  "embedded-mongodb",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]

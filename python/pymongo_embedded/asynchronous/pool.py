@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from pymongo.asynchronous.pool import AsyncConnection, Pool
 from pymongo.errors import DocumentTooLarge, ProtocolError
 from pymongo.hello import Hello
 from pymongo.message import _OpMsg
 from pymongo.monitoring import ConnectionClosedReason
 from pymongo.pool_shared import _CancellationContext
-from pymongo.synchronous.pool import Connection, Pool
 
-from ._native import NativeClient
-from .common import (
+from .._native import AsyncNativeClient
+from ..common import (
     PENDING_ALREADY,
     PENDING_MISSING,
     Socket,
@@ -21,17 +21,27 @@ from .common import (
 
 
 class _Interface:
+    """What `AsyncConnection` expects a socket to be, for a connection that has none.
+
+    `close` is a coroutine because the base class awaits it, and `is_closing` answers False
+    because there is no socket to have been closed underneath us -- the connection's own
+    `closed` flag is the whole truth, which is what `conn_closed` below returns.
+    """
+
     def __init__(self) -> None:
         self.get_conn = Socket()
 
-    def close(self) -> None:
+    async def close(self) -> None:
         pass
 
+    def is_closing(self) -> bool:
+        return False
 
-class EmbeddedConnection(Connection):
+
+class AsyncEmbeddedConnection(AsyncConnection):
     def __init__(
         self,
-        runtime: NativeClient,
+        runtime: AsyncNativeClient,
         pool: Pool,
         address: tuple[str, int],
         connection_id: int,
@@ -41,22 +51,30 @@ class EmbeddedConnection(Connection):
         self._runtime = runtime
         self._pending: tuple[int, _OpMsg] | None = None
 
-    def _hello(self, topology_version: Any, heartbeat_frequency: Any) -> Hello:
+    async def _hello(self, topology_version: Any, heartbeat_frequency: Any) -> Hello:
         return describe(self)
 
-    def send_message(self, message: bytes, max_doc_size: int) -> None:
+    async def send_message(self, message: bytes, max_doc_size: int) -> None:
+        """Runs the command, rather than sending it.
+
+        There is no socket and so no send that could be separated from a receive: the reply is
+        already in hand when this returns, and `receive_message` hands over what was kept here.
+        Awaiting it is what makes the whole thing worth building -- the event loop is free for
+        the length of the command, and cancelling the task stops the engine rather than merely
+        stopping the wait.
+        """
         if max_doc_size > self.max_bson_size:
             raise DocumentTooLarge(too_large(max_doc_size, self.max_bson_size))
         if self._pending is not None:
             raise ProtocolError(PENDING_ALREADY)
         try:
-            request_id, more_to_come, response = self._runtime.round_trip(message)
+            request_id, more_to_come, response = await self._runtime.round_trip(message)
             if not more_to_come:
                 self._pending = request_id, _OpMsg(0, response)
         except BaseException as error:
-            self._raise_connection_failure(error)
+            await self._raise_connection_failure(error)
 
-    def receive_message(self, request_id: int | None) -> _OpMsg:
+    async def receive_message(self, request_id: int | None) -> _OpMsg:
         try:
             pending, self._pending = self._pending, None
             if pending is None:
@@ -66,20 +84,20 @@ class EmbeddedConnection(Connection):
                 raise ProtocolError(mismatched(response_to, request_id))
             return response
         except BaseException as error:
-            self._raise_connection_failure(error)
+            await self._raise_connection_failure(error)
 
     def conn_closed(self) -> bool:
         return self.closed
 
 
-class EmbeddedPool(Pool):
-    def __init__(self, *args: Any, runtime: NativeClient, **kwargs: Any) -> None:
+class AsyncEmbeddedPool(Pool):
+    def __init__(self, *args: Any, runtime: AsyncNativeClient, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._runtime = runtime
         self._check_interval_seconds = None
 
-    def connect(self, handler: Any = None) -> EmbeddedConnection:
-        with self.lock:
+    async def connect(self, handler: Any = None) -> AsyncEmbeddedConnection:
+        async with self.lock:
             connection_id = self.next_connection_id
             self.next_connection_id += 1
             temporary_context = _CancellationContext()
@@ -93,23 +111,23 @@ class EmbeddedPool(Pool):
         # handshake, so "did it succeed" and "was there one" are different questions.
         completed_hello = False
         try:
-            connection = EmbeddedConnection(
+            connection = AsyncEmbeddedConnection(
                 self._runtime, self, self.address, connection_id, self.is_sdam
             )
-            with self.lock:
+            async with self.lock:
                 self.active_contexts.add(connection.cancel_context)
                 self.active_contexts.discard(temporary_context)
             if temporary_context.cancelled:
                 connection.cancel_context.cancel()
             if not self.is_sdam:
-                connection.hello()
+                await connection.hello()
                 completed_hello = True
                 self.is_writable = connection.is_writable
             if handler:
                 handler.contribute_socket(connection, completed_handshake=False)
-            connection.authenticate()
+            await connection.authenticate()
         except BaseException as error:
-            with self.lock:
+            async with self.lock:
                 self.active_contexts.discard(temporary_context)
                 if connection is not None:
                     self.active_contexts.discard(connection.cancel_context)
@@ -120,12 +138,12 @@ class EmbeddedPool(Pool):
                     connection_id, ConnectionClosedReason.ERROR
                 )
             else:
-                connection.close_conn(ConnectionClosedReason.ERROR)
+                await connection.close_conn(ConnectionClosedReason.ERROR)
             raise
 
         # Outside the `try`, as in the base class: a cluster time that failed to be gossiped
         # is not a connection that failed to be made, and treating it as one would close a
         # working connection and report it as a connection error.
         if handler:
-            handler.client._topology.receive_cluster_time(connection._cluster_time)
+            await handler.client._topology.receive_cluster_time(connection._cluster_time)
         return connection
