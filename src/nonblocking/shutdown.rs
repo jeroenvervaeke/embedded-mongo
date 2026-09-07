@@ -25,10 +25,10 @@ pub(super) struct Shutdown {
 }
 
 impl Shutdown {
-    pub(super) fn new(workers: u32, reply: oneshot::Sender<Result<()>>) -> Self {
+    pub(super) fn new(workers: usize, reply: oneshot::Sender<Result<()>>) -> Self {
         Self {
-            remaining: AtomicUsize::new(workers as usize),
-            handles: Mutex::new(Vec::with_capacity(workers as usize)),
+            remaining: AtomicUsize::new(workers),
+            handles: Mutex::new(Vec::with_capacity(workers)),
             reply: Mutex::new(Some(reply)),
         }
     }

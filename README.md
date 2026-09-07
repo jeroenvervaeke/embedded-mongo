@@ -31,7 +31,7 @@ process.**
   - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
   - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of command strands, up to a configurable count.
+- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a session pool that grows on demand up to a configurable ceiling.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
 ## Deployment model
@@ -137,8 +137,8 @@ again to see the result.
 ## Quick start
 
 Open a directory, insert a document, and query it back. The crate-root API is async — every
-command is dispatched to a pool of dedicated engine threads (one per command strand, eight by
-default), so an `.await` parks a task, never a runtime thread:
+command is dispatched to dedicated engine threads (growing from one to eight by default), so
+an `.await` parks a task, never a runtime thread:
 
 ```rust
 use embedded_mongodb::bson::doc;
@@ -185,7 +185,7 @@ The cache and the free-space floors are left where they were, and all five are s
 | Journal pre-allocation | off (mongod: on) | `Client::with_options` |
 | WiredTiger cache | 256 MB | `Client::with_options` |
 | Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `Client::process_limits` at any time |
-| Parallel commands (strand pool) | 8 | `Client::with_options` |
+| Parallel commands (sessions and async workers) | 1–8, 60-second idle timeout | `Client::with_options` |
 
 The cache figure is the value this engine has always used, and is also the floor mongod will
 not go below on a server; mongod's *default* is half of system memory above the first
@@ -194,17 +194,38 @@ grows into rather than memory it takes, and a cold read-only process at Ireland 
 well under it, so it is exposed for tuning rather than because the default is wrong.
 
 ```rust
-use embedded_mongodb::{Client, CommandStrands, FreeDiskFloor, JournalFileSize, OpenOptions};
+use embedded_mongodb::{Client, Concurrency, FreeDiskFloor, JournalFileSize, OpenOptions};
 
 let options = OpenOptions::new()
     .journal_file_size(JournalFileSize::from_kibibytes(2048)?)
     .free_disk_floor(FreeDiskFloor::from_mebibytes(32)?)
-    .command_strands(CommandStrands::from_count(4)?);
+    .concurrency(Concurrency::Fixed(4));
 let client = Client::with_options("./data", options).await?;
 ```
 
 Anything left unset keeps the engine's own default, so `Client::new(path)` and
 `Client::with_options(path, OpenOptions::new())` open identically.
+
+`Concurrency::Fixed(n)` preallocates `n` sessions and, for the async API, `n` worker threads.
+Use a dynamic policy when demand varies:
+
+```rust
+let options = OpenOptions::new().concurrency(Concurrency::Dynamic {
+    min: 1,
+    max: 16,
+    idle_timeout: std::time::Duration::from_secs(30),
+});
+```
+
+Dynamic pools preallocate `min`, grow when existing capacity is occupied, and make callers
+wait at `max`. Blocking clients reap expired idle sessions on the next checkout; async
+workers also wake at the timeout to reap sessions and retire excess threads. Neither pool
+shrinks below `min`. Counts must satisfy `1 <= min <= max <= 256`, with a nonzero timeout;
+invalid policies fail before opening storage. The default is dynamic: `min: 1`, `max: 8`,
+`idle_timeout: 60s`, including in the Python and Android bindings.
+
+Existing `.command_strands(CommandStrands::from_count(n)?)` calls still select a fixed pool.
+`CommandStrands` is an alias for `Concurrency`; use `.max()` in place of the old `.count()`.
 
 Keeping that promise for the free-space floor takes work rather than nothing, and the reason is
 worth knowing. Both floors are MongoDB **server parameters**, and this engine keeps one runtime
@@ -278,7 +299,7 @@ asyncio.run(main())
 ```
 
 No command ever occupies the event loop: the engine's own worker threads do the blocking, and
-awaiting costs a parked task. Commands run in parallel over the same eight strands, so
+awaiting costs a parked task. Commands scale to eight in parallel by default, so
 `asyncio.gather` over eight of them takes about as long as one.
 
 **Cancelling really cancels.** Dropping the future stops the engine rather than only stopping the
@@ -352,8 +373,8 @@ aggregations, and bulk document sequences. Authentication, TLS, compression, ses
 transactions, change streams and exhaust cursors are not supported.
 
 Threads and tasks both run in parallel. Every connection PyMongo hands out reaches the same
-engine, which runs commands over a pool of eight command strands, so eight of them issue eight
-commands at once rather than queueing behind one another. PyMongo's own `maxPoolSize` is the
+engine, whose session pool grows to eight by default, so eight of them can issue eight
+commands at once. PyMongo's own `maxPoolSize` is the
 other ceiling, and a fan-out gets the smaller of the two.
 
 ## What this unlocks
@@ -585,9 +606,8 @@ is linked statically, which costs a couple of megabytes and keeps a published li
   lifecycle and Bazel dependency work.
 - Many server components assume one global runtime. Multiple simultaneous `Client` values or
   different active database directories are rejected.
-- Commands issued through one `Client` are thread-safe and run in parallel up to the engine's
-  command-strand count (`OpenOptions::command_strands`, default 8); commands beyond it wait for
-  a strand to come free.
+- Commands issued through one `Client` are thread-safe and run in parallel up to
+  `OpenOptions::concurrency`'s ceiling (default 8); commands beyond it wait for capacity.
 - There is no process isolation: a MongoDB fatal invariant, memory fault, or abort terminates the
   Rust host.
 - Authentication, replication, transactions, change streams, TTL, backup, encryption, and the

@@ -13,13 +13,20 @@
 //! solves is the pool's -- an interrupt must never land on the *next* command to borrow the
 //! session -- and only code holding the checkout can rule that out.
 
-use crate::{Error, Result};
+use crate::{Concurrency, Error, Result};
 use embedded_mongodb_sys::{Client as NativeClient, Killer, Session as NativeSession};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 pub(crate) struct SessionPool {
-    idle: Mutex<Vec<NativeSession>>,
+    state: Mutex<PoolState>,
     returned: Condvar,
+    concurrency: Concurrency,
+}
+
+struct PoolState {
+    idle: Vec<(NativeSession, Instant)>,
+    total: u32,
 }
 
 /// One dispatched command, and whether it may still be interrupted.
@@ -47,18 +54,24 @@ enum Slot {
 type Interrupt = Box<dyn Fn() + Send>;
 
 impl SessionPool {
-    /// Opens `count` sessions. The caller has already turned a requested pool size into a
-    /// count that cannot be zero -- a pool with no sessions would leave every
-    /// [`checkout`](SessionPool::checkout) waiting forever.
-    pub(crate) fn open(runtime: &NativeClient, count: u32) -> Result<Self> {
-        let mut idle = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            idle.push(runtime.open_session()?);
+    /// Opens the policy's minimum before any command can run.
+    pub(crate) fn open(runtime: &NativeClient, concurrency: Concurrency) -> Result<Self> {
+        let mut idle = Vec::with_capacity(concurrency.min() as usize);
+        for _ in 0..concurrency.min() {
+            idle.push((runtime.open_session()?, Instant::now()));
         }
         Ok(Self {
-            idle: Mutex::new(idle),
+            state: Mutex::new(PoolState {
+                idle,
+                total: concurrency.min(),
+            }),
             returned: Condvar::new(),
+            concurrency,
         })
+    }
+
+    pub(crate) fn reap_idle(&self) {
+        lock(&self.state).reap_idle(self.concurrency);
     }
 
     /// Runs one command on a borrowed session, letting `slot` interrupt it while it runs.
@@ -74,11 +87,15 @@ impl SessionPool {
     /// somebody else.
     pub(crate) fn run(
         &self,
+        runtime: &NativeClient,
         slot: &CommandSlot,
         database: &str,
         command: &[u8],
     ) -> Option<Result<Vec<u8>>> {
-        let session = self.checkout();
+        let session = match self.checkout(runtime) {
+            Ok(session) => session,
+            Err(error) => return Some(Err(error)),
+        };
         let killer = session.killer();
         if !slot.start(Box::new(move || {
             // Nothing to do about a failure: the caller is gone, and a session that refuses to
@@ -92,21 +109,50 @@ impl SessionPool {
         Some(result.map_err(Error::from))
     }
 
-    /// Takes a session, waiting while every one is running a command. The returned guard hands
-    /// the session back on drop.
-    fn checkout(&self) -> Checkout<'_> {
-        let mut idle = lock(&self.idle);
-        while idle.is_empty() {
-            idle = self
-                .returned
-                .wait(idle)
-                .unwrap_or_else(PoisonError::into_inner);
+    /// Reaps expired idle sessions, then borrows or opens one; waits only at the ceiling.
+    fn checkout(&self, runtime: &NativeClient) -> Result<Checkout<'_>> {
+        let mut state = lock(&self.state);
+        loop {
+            state.reap_idle(self.concurrency);
+            let session = if let Some((session, _)) = state.idle.pop() {
+                session
+            } else if state.total < self.concurrency.max() {
+                // Opening under the lock reserves capacity atomically. Only session creation
+                // is serialized; the commands themselves run outside this lock.
+                let session = runtime.open_session()?;
+                state.total += 1;
+                session
+            } else {
+                state = self
+                    .returned
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner);
+                continue;
+            };
+            return Ok(Checkout {
+                pool: self,
+                session: Some(session),
+            });
         }
-        let session = idle.pop().expect("waited until a session was free");
-        Checkout {
-            pool: self,
-            session: Some(session),
-        }
+    }
+}
+
+impl PoolState {
+    fn reap_idle(&mut self, concurrency: Concurrency) {
+        let Some(timeout) = concurrency.idle_timeout() else {
+            return;
+        };
+        let mut excess = self.total - concurrency.min();
+        let before = self.idle.len();
+        self.idle.retain(|(_, returned)| {
+            if excess > 0 && returned.elapsed() >= timeout {
+                excess -= 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.total -= (before - self.idle.len()) as u32;
     }
 }
 
@@ -185,7 +231,7 @@ impl Checkout<'_> {
 impl Drop for Checkout<'_> {
     fn drop(&mut self) {
         if let Some(session) = self.session.take() {
-            lock(&self.pool.idle).push(session);
+            lock(&self.pool.state).idle.push((session, Instant::now()));
             self.pool.returned.notify_one();
         }
     }
@@ -298,5 +344,98 @@ mod tests {
             1,
             "a disarm arriving after the cancel must not put the slot back in a killable state"
         );
+    }
+    #[test]
+    fn pools_grow_wait_reap_and_regrow_without_losing_sessions() {
+        use super::{SessionPool, lock};
+        use crate::Concurrency;
+        use embedded_mongodb_sys::Client;
+        use std::{
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let _engine = crate::TEST_ENGINE.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Client::open(directory.path().to_str().unwrap()).unwrap();
+        for policy in [
+            Concurrency::Fixed(2),
+            Concurrency::Dynamic {
+                min: 1,
+                max: 3,
+                idle_timeout: Duration::from_secs(60),
+            },
+            Concurrency::Dynamic {
+                min: 2,
+                max: 2,
+                idle_timeout: Duration::from_secs(60),
+            },
+        ] {
+            let pool = SessionPool::open(&runtime, policy).unwrap();
+            assert_eq!(lock(&pool.state).total, policy.min());
+            let mut held: Vec<_> = (0..policy.max())
+                .map(|_| pool.checkout(&runtime).unwrap())
+                .collect();
+            assert_eq!(lock(&pool.state).total, policy.max());
+            assert!(lock(&pool.state).idle.is_empty());
+
+            thread::scope(|scope| {
+                let (ready, started) = mpsc::channel();
+                let (reply, received) = mpsc::channel();
+                let pool = &pool;
+                let runtime = &runtime;
+                scope.spawn(move || {
+                    ready.send(()).unwrap();
+                    let session = pool.checkout(runtime).unwrap();
+                    let ping = bson::doc! { "ping": 1 }.to_vec().unwrap();
+                    reply.send(session.run_command("admin", &ping)).unwrap();
+                });
+                started.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    matches!(
+                        received.recv_timeout(Duration::from_millis(20)),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    ),
+                    "checkout exceeded the ceiling"
+                );
+                drop(held.pop());
+                received
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+            });
+
+            // Only idle sessions expire, even when more than min are currently borrowed.
+            for (_, returned) in &mut lock(&pool.state).idle {
+                *returned = Instant::now() - Duration::from_secs(120);
+            }
+            pool.reap_idle();
+            assert_eq!(
+                lock(&pool.state).total,
+                if policy.idle_timeout().is_some() {
+                    policy.min().max(held.len() as u32)
+                } else {
+                    policy.max()
+                }
+            );
+            drop(held);
+            // Newly returned sessions keep their fresh idle timestamp.
+            let before = lock(&pool.state).total;
+            pool.reap_idle();
+            assert_eq!(lock(&pool.state).total, before);
+            for (_, returned) in &mut lock(&pool.state).idle {
+                *returned = Instant::now() - Duration::from_secs(120);
+            }
+            let checkout = pool.checkout(&runtime).unwrap();
+            assert_eq!(lock(&pool.state).total, policy.min());
+            drop(checkout);
+            let held: Vec<_> = (0..policy.max())
+                .map(|_| pool.checkout(&runtime).unwrap())
+                .collect();
+            assert_eq!(lock(&pool.state).total, policy.max());
+            drop(held);
+        }
+        runtime.close().unwrap();
     }
 }
