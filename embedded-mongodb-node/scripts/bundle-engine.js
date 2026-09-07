@@ -15,9 +15,19 @@ const addon = fs.readdirSync(root).find((name) => /^embedded-mongodb\..+\.node$/
 if (!addon) throw new Error('no addon found; run `napi build --platform` first');
 const platform = addon.slice('embedded-mongodb.'.length, -'.node'.length);
 
+// Where napi-rs put the build: it always hands cargo an explicit `--target`, resolved the same
+// way as here -- CARGO_BUILD_TARGET if set, the host triple otherwise -- so the output sits
+// under `<target dir>/<triple>/release`, never under `<target dir>/release`.
+const targetDir = JSON.parse(
+  execFileSync('cargo', ['metadata', '--format-version', '1', '--no-deps'], { cwd: root, encoding: 'utf8' })
+).target_directory;
+const triple =
+  process.env.CARGO_BUILD_TARGET ??
+  /^host: (.+)$/m.exec(execFileSync('rustc', ['-vV'], { encoding: 'utf8' }))?.[1];
+if (!triple) throw new Error('could not read the host target triple from rustc -vV');
 // Newest first: a target directory keeps the output of every fingerprint it has ever had, and
 // an older one would be a different library.
-const buildDir = path.join(process.env.CARGO_TARGET_DIR ?? path.join(root, '..', 'target'), 'release', 'build');
+const buildDir = path.join(targetDir, triple, 'release', 'build');
 const engine = fs
   .readdirSync(buildDir)
   .filter((name) => name.startsWith('embedded-mongodb-sys-'))
