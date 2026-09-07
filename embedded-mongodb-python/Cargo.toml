@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 bson = "3.1.0"
 embedded-mongodb = { path = ".." }
+embedded-mongodb-wire = { path = "../embedded-mongodb-wire" }
 # experimental-async is what lets `async fn` appear in #[pymethods], which is how the
 # asynchronous client hands the event loop a coroutine rather than a blocked thread. Still gated
 # in pyo3 0.29, so a pyo3 upgrade has to be read for changes to it before it is taken.

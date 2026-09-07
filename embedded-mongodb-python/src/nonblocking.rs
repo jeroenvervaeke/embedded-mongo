@@ -13,8 +13,8 @@
 //! not merely the waiting for it.
 
 use crate::wait::block_on;
-use crate::wire;
 use embedded_mongodb::Client;
+use embedded_mongodb_wire as wire;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::RwLock;
