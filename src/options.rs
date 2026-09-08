@@ -99,7 +99,12 @@ impl Concurrency {
     /// sessions idle longer than `idle_timeout` closed back down to `min`.
     ///
     /// Refuses a `min` above `max`, either outside [`MIN_COUNT`](Concurrency::MIN_COUNT) and
-    /// [`MAX_COUNT`](Concurrency::MAX_COUNT), and a zero idle timeout.
+    /// [`MAX_COUNT`](Concurrency::MAX_COUNT), and an idle timeout under a millisecond -- which
+    /// includes zero, and which would close a session the moment it came back.
+    ///
+    /// A `min` equal to `max` is a fixed pool and is answered as one: there is no room above
+    /// the floor for a session to be spare in, so the timeout would name a reaper with nothing
+    /// it could ever close and put every worker on a wait it could never finish.
     pub fn dynamic(min: u32, max: u32, idle_timeout: Duration) -> Result<Self, OutOfRange> {
         let max = check_range(
             "maximum concurrency",
@@ -115,11 +120,14 @@ impl Concurrency {
         // the 49 days a `u32` of milliseconds holds is nobody's mistake.
         let millis = u32::try_from(idle_timeout.as_millis()).unwrap_or(u32::MAX);
         check_range("idle timeout", "milliseconds", millis, 1, u32::MAX)?;
-        Ok(Self {
-            min,
-            max,
-            idle_timeout: Some(idle_timeout),
-        })
+        match min == max {
+            true => Ok(Self::preallocated(min)),
+            false => Ok(Self {
+                min,
+                max,
+                idle_timeout: Some(idle_timeout),
+            }),
+        }
     }
 
     /// Sessions opened before the first command runs.
@@ -328,11 +336,25 @@ mod tests {
         assert_eq!(elastic.idle_timeout(), Some(century));
     }
 
+    /// Two spellings of one pool have to *be* one pool: a policy with no room above its floor
+    /// has nothing a reaper could ever close, and keeping the timeout would start one anyway
+    /// and leave every worker waiting out a clock that can never fire.
     #[test]
-    fn a_floor_equal_to_its_ceiling_is_accepted() {
+    fn a_floor_equal_to_its_ceiling_is_the_fixed_pool_it_describes() {
         let elastic = Concurrency::dynamic(4, 4, a_minute()).expect("4..4 is in range");
 
-        assert_eq!(elastic.min(), 4);
-        assert_eq!(elastic.max(), 4);
+        assert_eq!(
+            elastic,
+            Concurrency::from_count(4).expect("4 sessions is in range")
+        );
+        assert_eq!(elastic.idle_timeout(), None);
+    }
+
+    #[test]
+    fn an_idle_timeout_under_a_millisecond_is_refused() {
+        assert!(
+            Concurrency::dynamic(1, 8, Duration::from_micros(500)).is_err(),
+            "a floor of one millisecond is the floor, whatever the unit asked in"
+        );
     }
 }
