@@ -418,6 +418,11 @@ npm run build   # cargo build through napi-rs, then the engine copied beside the
 npm test
 ```
 
+Publishing is the `publish-node` workflow, dispatched by hand: it builds and tests on the three
+platforms, then publishes the platform packages and the root through npm's trusted publishing,
+with a provenance attestation and no token. The same steps by hand are `npm publish --access
+public` in each `npm/<platform>` directory and then in the package root.
+
 Authentication, TLS, compression, sessions, transactions, change streams and exhaust cursors
 are not supported, and neither is Windows.
 

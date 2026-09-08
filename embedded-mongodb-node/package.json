@@ -30,7 +30,6 @@
   },
   "scripts": {
     "build": "napi build --platform --release --js native.js --dts native.d.ts && node scripts/bundle-engine.js",
-    "prepublishOnly": "napi prepublish -t npm --no-gh-release",
     "test": "node --test test/*.test.js"
   },
   "peerDependencies": {
