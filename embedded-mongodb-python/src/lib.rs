@@ -1,6 +1,7 @@
 mod nonblocking;
 mod wait;
-mod wire;
+
+use embedded_mongodb_wire as wire;
 
 use std::sync::{PoisonError, RwLock};
 

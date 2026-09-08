@@ -1,0 +1,126 @@
+name: publish-node
+
+# Publishes @0q/embedded-mongodb and its platform packages to npm. Dispatch only: a publish is
+# a decision, not a side effect of a push.
+#
+# No token. npm's trusted publishing verifies the GitHub OIDC token this job presents, so each
+# of the four packages has to name this repository and this workflow file as its trusted
+# publisher on npmjs.com, and the publish then carries a provenance attestation for free.
+# The first publish of a package cannot use it -- there is no package page to configure yet --
+# which is why the initial 0.1.0 went up by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and pack everything, but stop short of publishing
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-node
+  cancel-in-progress: false
+
+jobs:
+  # The same build the ci.yml node job runs, on the same runners: the addon through napi-rs,
+  # the engine copied beside it into the platform package.
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, cache: ~/.cache/embedded-mongodb }
+          - { target: aarch64-apple-darwin, runner: macos-15, cache: ~/Library/Caches/embedded-mongodb }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.rs needs SOURCE_COMMIT to check the library it downloads.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: native-lib-${{ matrix.target }}-${{ hashFiles('embedded-mongodb-sys/prebuilt.rs') }}
+      - name: Build the addon and put the engine beside it
+        working-directory: embedded-mongodb-node
+        run: |
+          npm ci
+          npm run build
+      # What is about to be published is what was just tested, on the machine that built it.
+      - name: Run the binding's tests
+        working-directory: embedded-mongodb-node
+        run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.target }}
+          # The whole npm/ tree rather than the one platform directory, so every artifact has
+          # the same root and the download below can merge them into one npm/ again.
+          path: embedded-mongodb-node/npm/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # The OIDC token npm's trusted publishing checks.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing arrived in npm 11.5.1; the npm a Node release bundles can lag it.
+      - run: npm install -g npm@^11.5.1 && npm --version
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: node-*
+          path: embedded-mongodb-node/npm
+          merge-multiple: true
+
+      - name: Check every platform package carries its addon and the engine
+        working-directory: embedded-mongodb-node
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            platform=$(basename "$dir")
+            for required in "$dir/embedded-mongodb.$platform.node" "$dir/libembedded_mongodb_native.so"; do
+              test -f "$required" || { echo "::error::$required is missing"; find npm >&2; exit 1; }
+            done
+          done
+          find npm -type f | sort
+
+      - name: Check the versions agree
+        working-directory: embedded-mongodb-node
+        # The root manifest pins each platform package to one version in optionalDependencies.
+        # A mismatch would publish a root that asks for a platform package nobody published.
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          for dir in npm/*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            platform_version=$(node -p "require('./$dir/package.json').version")
+            pinned=$(node -p "require('./package.json').optionalDependencies['$name'] ?? ''")
+            [ "$platform_version" = "$version" ] && [ "$pinned" = "$version" ] \
+              || { echo "::error::$name is $platform_version, pinned as '$pinned', root is $version"; exit 1; }
+          done
+          echo "publishing $version"
+
+      # Platform packages first, so the root's optionalDependencies resolve the moment it lands.
+      - name: Publish
+        working-directory: embedded-mongodb-node
+        env:
+          FLAGS: --access public --provenance ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            (cd "$dir" && npm publish $FLAGS)
+          done
+          npm publish $FLAGS
