@@ -45,8 +45,9 @@ struct Idle<S> {
 }
 
 impl<S> Idles<S> {
-    pub(super) fn new(sessions: Vec<S>) -> Self {
-        let open = sessions.len() as u32;
+    /// `open` is what the caller opened, passed rather than counted off the vector so that the
+    /// authoritative count is never a cast of a length.
+    pub(super) fn new(sessions: Vec<S>, open: u32) -> Self {
         Self {
             state: Mutex::new(State {
                 idle: sessions.into_iter().map(Idle::taken).collect(),
@@ -99,7 +100,6 @@ impl<S> State<S> {
             let waited = now.saturating_duration_since(entry.since);
             if spare > 0 && waited >= timeout {
                 spare -= 1;
-                self.open -= 1;
                 expired.push(entry.session);
                 continue;
             }
@@ -112,6 +112,18 @@ impl<S> State<S> {
         }
         self.idle = kept;
         (expired, wait)
+    }
+}
+
+impl<S> State<S> {
+    /// Counts sessions the reaper has finished destroying.
+    ///
+    /// Kept until then on purpose. `open` is what the ceiling is measured against, and dropping
+    /// it while the sessions are still being destroyed would let callers open that many more
+    /// against an engine still holding the old ones -- a documented ceiling of eight briefly
+    /// running fifteen clients.
+    fn closed(&mut self, sessions: u32) {
+        self.open -= sessions;
     }
 }
 
@@ -160,11 +172,17 @@ fn reap<S>(idles: &Idles<S>, min: u32, timeout: Duration) {
         }
         let (expired, wait) = state.reap(min, timeout, Instant::now());
         if !expired.is_empty() {
+            // Never more than the pool ever opened, which `Concurrency` caps at 256.
+            let closed = expired.len() as u32;
             // Closed with the pool unlocked: a caller waiting for a session must not also wait
             // for sessions being destroyed.
             drop(state);
             drop(expired);
             state = lock(&idles.state);
+            state.closed(closed);
+            // Room under the ceiling again, which is what a caller waiting at it is waiting
+            // for; nothing else will tell it, because no session is coming back.
+            idles.returned.notify_all();
             continue;
         }
         state = idles
@@ -241,10 +259,27 @@ mod tests {
         let (expired, _) = state.reap(1, TIMEOUT, now);
 
         assert_eq!(expired.len(), 1);
-        assert_eq!(state.open, 1, "the closed session is no longer open");
         assert_eq!(state.idle.len(), 1, "the fresh session stays");
         drop(expired);
         assert_eq!(closed.load(Ordering::Relaxed), 1);
+    }
+
+    /// The ceiling is measured against `open`, so a session still being destroyed has to keep
+    /// counting: giving the count back first would let callers open that many more against an
+    /// engine still holding the old ones.
+    #[test]
+    fn a_session_being_destroyed_still_counts_against_the_ceiling() {
+        let (mut state, _, now) = pool(2, &[TIMEOUT, Duration::ZERO]);
+
+        let (expired, _) = state.reap(1, TIMEOUT, now);
+
+        assert_eq!(
+            state.open, 2,
+            "the count is still the pool's until the session is really gone"
+        );
+        drop(expired);
+        state.closed(1);
+        assert_eq!(state.open, 1);
     }
 
     #[test]
@@ -273,7 +308,6 @@ mod tests {
         let (expired, _) = state.reap(3, TIMEOUT, now);
 
         assert_eq!(expired.len(), 1, "only one of the four is spare");
-        assert_eq!(state.open, 3);
     }
 
     #[test]

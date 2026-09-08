@@ -63,7 +63,7 @@ impl CommandSlot {
 
     /// Gives up the interrupt. From here a cancel does nothing, which is correct: the command
     /// is over, and the session is about to belong to somebody else.
-    pub(super) fn finish(&self) {
+    fn finish(&self) {
         let mut state = lock(&self.state);
         if matches!(*state, Slot::Running(_)) {
             *state = Slot::Finished;
@@ -71,9 +71,28 @@ impl CommandSlot {
     }
 }
 
+/// Gives the interrupt up, however the command it was armed for ends.
+///
+/// A guard rather than a call after the command, because the command can unwind -- the async
+/// layer catches exactly that so a panicking command fails only itself -- and an interrupt left
+/// armed on a session already back in the pool would kill whoever borrowed it next.
+pub(super) struct Disarm<'slot>(&'slot CommandSlot);
+
+impl<'slot> Disarm<'slot> {
+    pub(super) fn new(slot: &'slot CommandSlot) -> Self {
+        Self(slot)
+    }
+}
+
+impl Drop for Disarm<'_> {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CommandSlot, Interrupt};
+    use super::{CommandSlot, Disarm, Interrupt};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -121,6 +140,32 @@ mod tests {
             0,
             "cancelling after the command finished must interrupt nothing -- the session may \
              already be running somebody else's command"
+        );
+    }
+
+    /// The guard's whole reason for being. A command that unwinds still ends, and the session
+    /// it was running on goes straight back into the pool -- so an interrupt still armed at
+    /// that point would land on whatever borrowed the session next.
+    #[test]
+    fn a_command_that_unwound_is_not_interrupted_either() {
+        let slot = CommandSlot::new();
+        let (interrupt, calls) = counting();
+
+        assert!(slot.start(interrupt));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _disarm = Disarm::new(&slot);
+            panic!("a command that fails the way the async layer expects one to");
+        }));
+        slot.cancel();
+
+        assert!(
+            unwound.is_err(),
+            "the panic should have been caught, not avoided"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "an interrupt left armed by an unwind would kill the next command on that session"
         );
     }
 

@@ -6,6 +6,7 @@
 //! covers both, and the fixed case pays nothing for the elastic one.
 
 use super::reaper::{Idles, start_reaper};
+use super::slot::Disarm;
 use super::{CommandSlot, lock};
 use crate::{Concurrency, Error, Result};
 use embedded_mongodb_sys::{Client as NativeClient, Killer, Session as NativeSession};
@@ -33,7 +34,7 @@ impl SessionPool {
         for _ in 0..limits.min() {
             sessions.push(runtime.open_session()?);
         }
-        let idles = Arc::new(Idles::new(sessions));
+        let idles = Arc::new(Idles::new(sessions, limits.min()));
         let reaper = limits
             .idle_timeout()
             .and_then(|timeout| start_reaper(&idles, limits.min(), timeout));
@@ -74,8 +75,10 @@ impl SessionPool {
         })) {
             return None;
         }
+        // Declared after the checkout so that it drops first: the interrupt has to be given up
+        // while the session is still held, however the command below ends. See [`Disarm`].
+        let _disarm = Disarm::new(slot);
         let result = session.run_command(database, command);
-        slot.finish();
         Some(result.map_err(Error::from))
     }
 
