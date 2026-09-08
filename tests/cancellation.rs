@@ -9,7 +9,7 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, CommandStrands, OpenOptions,
+    Client, Concurrency, OpenOptions,
     bson::{Document, doc},
 };
 use std::time::{Duration, Instant};
@@ -31,7 +31,7 @@ async fn dropping_a_command_frees_its_session() {
     let client = Client::with_options(
         &path,
         OpenOptions::new()
-            .command_strands(CommandStrands::from_count(1).expect("one session is in range")),
+            .concurrency(Concurrency::from_count(1).expect("one session is in range")),
     )
     .await
     .expect("opening");

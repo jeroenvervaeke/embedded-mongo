@@ -1,15 +1,17 @@
 //! That the session pool is the concurrency level, and nothing else is.
 //!
 //! The design rests on one claim: N sessions run N commands at once. Everything above it --
-//! `CommandStrands`, the blocking pool, one async worker per session -- is sizing policy built
-//! on that claim, so it is worth measuring rather than asserting.
+//! `Concurrency`, the blocking pool, one async worker per session -- is sizing policy built on
+//! that claim, so it is worth measuring rather than asserting. `elastic_concurrency.rs` covers
+//! what the policy does with that claim; this covers the claim itself.
 //!
 //! The measurement varies the session count and holds everything else still. Eight caller
 //! threads issue eight identical CPU-bound aggregations every time; only the pool size moves.
 //! If sessions gate concurrency, wall-clock falls as the pool grows -- eight commands over one
 //! session cost eight commands' time, over eight sessions cost one. If something else were the
 //! gate (a lock in the engine, a strand shared behind our back) the wall-clock would barely
-//! move, because the thread count never does.
+//! move, because the thread count never does. Fixed pools throughout, so the size under test is
+//! the size the pool has.
 //!
 //! Deliberately the blocking API: it owns no threads, so the caller's eight are the only ones
 //! in play and the session pool is unambiguously the variable. That is also exactly the shape
@@ -19,7 +21,7 @@
 mod scratch;
 
 use embedded_mongodb::{
-    CommandStrands, OpenOptions,
+    Concurrency, OpenOptions,
     blocking::Client,
     bson::{Document, doc},
 };
@@ -120,7 +122,7 @@ fn seed(path: &Path) {
 /// index-repair check, which have nothing to do with what is being measured.
 fn measure(path: &Path, sessions: u32) -> Duration {
     let options = OpenOptions::new()
-        .command_strands(CommandStrands::from_count(sessions).expect("a pool size in range"));
+        .concurrency(Concurrency::from_count(sessions).expect("a pool size in range"));
     let client = Client::with_options(path, options).expect("opening with a sized pool");
 
     let started = Instant::now();
