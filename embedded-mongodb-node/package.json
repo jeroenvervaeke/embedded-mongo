@@ -1,6 +1,6 @@
 {
   "name": "@0q/embedded-mongodb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run the MongoDB Node.js driver against an in-process embedded MongoDB engine",
   "license": "SSPL-1.0",
   "repository": {
@@ -41,9 +41,9 @@
     }
   },
   "optionalDependencies": {
-    "@0q/embedded-mongodb-linux-x64-gnu": "0.1.0",
-    "@0q/embedded-mongodb-linux-arm64-gnu": "0.1.0",
-    "@0q/embedded-mongodb-darwin-arm64": "0.1.0"
+    "@0q/embedded-mongodb-linux-x64-gnu": "0.1.1",
+    "@0q/embedded-mongodb-linux-arm64-gnu": "0.1.1",
+    "@0q/embedded-mongodb-darwin-arm64": "0.1.1"
   },
   "publishConfig": {
     "access": "public"
