@@ -1,5 +1,11 @@
 [workspace]
-members = ["embedded-mongodb-android", "embedded-mongodb-python", "embedded-mongodb-sys"]
+members = [
+    "embedded-mongodb-android",
+    "embedded-mongodb-node",
+    "embedded-mongodb-python",
+    "embedded-mongodb-sys",
+    "embedded-mongodb-wire",
+]
 resolver = "3"
 
 [package]

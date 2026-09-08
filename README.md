@@ -26,10 +26,12 @@ process.**
 - 🍃 **Real MongoDB execution** — queries, cursors, aggregation pipelines, commands, and storage
   run through MongoDB's own engine, backed by WiredTiger.
 - 📦 **SQLite-like deployment** — open a local directory; no database server to install or manage.
-- 🦀 **Rust-native today, multi-language tomorrow** — work with typed Serde collections or raw
-  MongoDB documents.
-  - 🐍 **Python** — a binding can wrap the exported C ABI without changing the database engine.
-  - 🟨 **JavaScript / Node.js** — the same boundary can expose the API to the JavaScript ecosystem.
+- 🦀 **Rust-native, with bindings** — work with typed Serde collections or raw MongoDB
+  documents, or reach the same engine from another language.
+  - 🐍 **Python** — `pymongo_embedded.MongoClient("mongodb_embedded://./data")`, PyMongo's own
+    client over the in-process engine.
+  - 🟨 **Node.js** — `@0q/embedded-mongodb`, the MongoDB Node.js driver over the same engine,
+    and the URI scheme that mongosh understands.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
 - 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of command strands, up to a configurable count.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
@@ -355,6 +357,86 @@ Threads and tasks both run in parallel. Every connection PyMongo hands out reach
 engine, which runs commands over a pool of eight command strands, so eight of them issue eight
 commands at once rather than queueing behind one another. PyMongo's own `maxPoolSize` is the
 other ceiling, and a fan-out gets the smaller of the two.
+
+## Node.js
+
+`@0q/embedded-mongodb` runs the MongoDB Node.js driver against the in-process engine, the way
+`pymongo-embedded` does for PyMongo:
+
+```js
+const { MongoClient } = require('@0q/embedded-mongodb');
+
+const client = new MongoClient('mongodb_embedded://./data');
+const items = client.db('app').collection('items');
+await items.insertOne({ name: 'embedded' });
+console.log(await items.findOne());
+await client.close();
+```
+
+`MongoClient` is the driver's own class: an address it does not recognise is handed to the
+driver untouched, so one class serves both a server and a directory on disk. Both spellings of
+the scheme work, `mongodb_embedded://` and `mongodb+embedded://`, with a relative or an absolute
+directory after them, which is created if it does not exist.
+
+The driver is not modified and nothing of its internals is reached into. It speaks the wire
+protocol to a socket, so the package gives it one: a listener on a Unix socket in a private
+temporary directory, inside the same process, that hands every message it reads to the engine
+and writes the reply back. The lower layer is available on its own for a caller that already
+has a driver -- mongosh is one:
+
+```js
+const { open } = require('@0q/embedded-mongodb');
+
+const embedded = await open('./data');
+const client = new MongoClient(embedded.uri); // The driver's MongoClient, unchanged.
+// ...
+await client.close();
+await embedded.close();
+```
+
+`open` returns a promise because opening does storage recovery and the one-time index repair
+scan; `openSync` blocks instead, for callers with no loop to await on, and is what the
+`MongoClient` constructor uses. Only one embedded engine may be open per process; opening a
+second says `only one embedded MongoDB runtime may be open per process`, and closing the first
+releases it.
+
+The handshake is answered by the package rather than the engine, as the Python binding does,
+and for the same two reasons: the engine's own `hello` advertises sessions, which a direct
+client cannot use, and a `topologyVersion`, which would have the driver's monitor park an
+engine strand on an awaitable hello every ten seconds. Everything else goes to the engine as
+sent. Connections run their commands in parallel over the engine's strand pool, up to the
+driver's `maxPoolSize` and the engine's strand count, whichever is smaller.
+
+The package ships the addon and the engine in platform packages, the way napi-rs packages do,
+so `npm install @0q/embedded-mongodb` fetches only the one for the machine it runs on. To build
+and test it from a checkout:
+
+```sh
+cd embedded-mongodb-node
+npm install
+npm run build   # cargo build through napi-rs, then the engine copied beside the addon
+npm test
+```
+
+Publishing is the `publish-node` workflow, dispatched by hand: it builds and tests on the three
+platforms, then publishes the platform packages and the root through npm's trusted publishing,
+with a provenance attestation and no token. The same steps by hand are `npm publish --access
+public` in each `npm/<platform>` directory and then in the package root.
+
+Authentication, TLS, compression, sessions, transactions, change streams and exhaust cursors
+are not supported, and neither is Windows.
+
+### mongosh
+
+A [fork of mongosh](https://github.com/jeroenvervaeke/mongosh) accepts the same URIs on the
+command line:
+
+```sh
+mongosh mongodb_embedded://./data
+```
+
+It opens the directory through this package and talks to it over the driver it already
+carries, so `show dbs`, `db.items.find()` and the rest work as they do against a server.
 
 ## What this unlocks
 

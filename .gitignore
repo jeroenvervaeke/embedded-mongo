@@ -2,3 +2,7 @@
 /.cache
 __pycache__/
 *.pyc
+node_modules/
+*.node
+/embedded-mongodb-node/libembedded_mongodb_native.so
+/embedded-mongodb-node/npm/*/libembedded_mongodb_native.so

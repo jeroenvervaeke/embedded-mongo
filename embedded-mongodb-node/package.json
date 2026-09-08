@@ -1,0 +1,55 @@
+{
+  "name": "@0q/embedded-mongodb",
+  "version": "0.1.1",
+  "description": "Run the MongoDB Node.js driver against an in-process embedded MongoDB engine",
+  "license": "SSPL-1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeroenvervaeke/embedded-mongo.git",
+    "directory": "embedded-mongodb-node"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native.js",
+    "native.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">= 20"
+  },
+  "napi": {
+    "binaryName": "embedded-mongodb",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release --js native.js --dts native.d.ts && node scripts/bundle-engine.js",
+    "test": "node --test test/*.test.js"
+  },
+  "peerDependencies": {
+    "mongodb": ">=6"
+  },
+  "peerDependenciesMeta": {
+    "mongodb": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "@0q/embedded-mongodb-linux-x64-gnu": "0.1.1",
+    "@0q/embedded-mongodb-linux-arm64-gnu": "0.1.1",
+    "@0q/embedded-mongodb-darwin-arm64": "0.1.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.9.0",
+    "mongodb": "^7.5.0"
+  }
+}
