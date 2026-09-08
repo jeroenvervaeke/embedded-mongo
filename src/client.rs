@@ -13,16 +13,20 @@ use embedded_mongodb_sys::Client as NativeClient;
 use std::path::Path;
 
 pub struct Client {
-    /// The sessions this client runs commands on, sized to
-    /// [`OpenOptions::command_strands`](crate::OpenOptions::command_strands). Held in a pool
-    /// because a `Client` is shared across threads and each session runs one command at a time:
-    /// a caller checks one out for the length of its command and hands it back. This is the
-    /// whole of the parallelism policy, and it is here, in Rust, rather than in the engine.
+    /// The sessions this client runs commands on, following the policy in
+    /// [`OpenOptions::concurrency`](crate::OpenOptions::concurrency). Held in a pool because a
+    /// `Client` is shared across threads and each session runs one command at a time: a caller
+    /// checks one out for the length of its command and hands it back. This is the whole of the
+    /// parallelism policy, and it is here, in Rust, rather than in the engine.
+    ///
+    /// Declared before the runtime so that it drops first: an elastic pool has a reaper thread
+    /// to join, and joining it before the handle below goes is what keeps that thread from
+    /// closing sessions while the engine is closing under it.
     pool: SessionPool,
-    /// The runtime handle. Each session shares ownership of the engine with it, so the order in
-    /// which these two fields drop does not matter: the engine closes only once both the pool's
-    /// sessions and this handle are gone. [`close`](Client::close) still drops the pool first,
-    /// so that the handle is then the sole owner and the close can run eagerly and report.
+    /// The runtime handle, and what the pool opens its sessions on. Each session shares
+    /// ownership of the engine with it, so the engine closes only once both the pool's sessions
+    /// and this handle are gone. [`close`](Client::close) drops the pool first, so that the
+    /// handle is then the sole owner and the close can run eagerly and report.
     runtime: NativeClient,
 }
 
@@ -86,8 +90,8 @@ impl Client {
         };
         // The pool is opened before anything runs a command, because everything does -- the
         // floor below and the repair pass both go through the pool like any other caller.
-        let strands = options::OpenOptions::strand_count(options.as_ref());
-        let pool = SessionPool::open(&runtime, strands.count())?;
+        let concurrency = options::OpenOptions::resolve_concurrency(options.as_ref());
+        let pool = SessionPool::open(&runtime, concurrency)?;
         let client = Self { pool, runtime };
         // Before the repair pass, which creates indexes: a floor the caller lowered so that
         // index builds work on a full device has to be in force by the time this engine
@@ -188,7 +192,7 @@ impl Client {
             Ok(encoded) => encoded,
             Err(error) => return Some(Err(Error::from(error))),
         };
-        let response = match self.pool.run(slot, database, &encoded)? {
+        let response = match self.pool.run(&self.runtime, slot, database, &encoded)? {
             Ok(response) => response,
             Err(error) => return Some(Err(error)),
         };
@@ -207,14 +211,14 @@ impl Client {
         database: &str,
         command: &[u8],
     ) -> Option<Result<Vec<u8>>> {
-        self.pool.run(slot, database, command)
+        self.pool.run(&self.runtime, slot, database, command)
     }
 
     fn send(&self, database: &str, command: &[u8]) -> Result<Vec<u8>> {
         // A blocking caller is inside this call until it returns, so it has no way to abandon
         // it: the slot is created and dropped here and never cancelled.
         self.pool
-            .run(&CommandSlot::new(), database, command)
+            .run(&self.runtime, &CommandSlot::new(), database, command)
             .expect("a slot nobody can cancel always runs its command")
     }
 }

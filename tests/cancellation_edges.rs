@@ -8,7 +8,7 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, CommandStrands, FreeDiskFloor, OpenOptions,
+    Client, Concurrency, FreeDiskFloor, OpenOptions,
     bson::{Document, doc},
 };
 use std::time::Duration;
@@ -26,7 +26,7 @@ async fn cancellation_edges() {
     let client = Client::with_options(
         &path,
         OpenOptions::new()
-            .command_strands(CommandStrands::from_count(1).expect("one session is in range")),
+            .concurrency(Concurrency::from_count(1).expect("one session is in range")),
     )
     .await
     .expect("opening");

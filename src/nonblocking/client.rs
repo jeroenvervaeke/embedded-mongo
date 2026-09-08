@@ -35,11 +35,13 @@ use std::path::Path;
 /// [`ProcessLimits`] is the exception -- see there for why moving a floor must not be
 /// abandoned half-done.
 ///
-/// Commands run in parallel up to the session-pool size --
-/// [`OpenOptions::command_strands`], eight unless asked otherwise -- because there is one
-/// worker thread per session, each holding its session for the length of a command. A `Client`
-/// is `Send + Sync` and futures from different tasks proceed independently; what they contend
-/// on is what mongod's own sessions contend on.
+/// Commands run in parallel up to the session pool's ceiling --
+/// [`OpenOptions::concurrency`], eight fixed sessions unless asked otherwise -- because there
+/// is one worker thread per session, each holding its session for the length of a command. An
+/// elastic policy moves both together: a command awaited with every worker busy starts another,
+/// up to the ceiling, and a worker that waits out the idle timeout retires. A `Client` is
+/// `Send + Sync` and futures from different tasks proceed independently; what they contend on
+/// is what mongod's own sessions contend on.
 pub struct Client {
     engine: Engine,
 }
@@ -57,8 +59,8 @@ impl Client {
 
     /// [`Client::new`] with the engine's storage limits overridden; see
     /// [`blocking::Client::with_options`](crate::blocking::Client::with_options).
-    /// [`OpenOptions::command_strands`] sizes the session pool for both, and here also the
-    /// worker threads that drive it -- one per session.
+    /// [`OpenOptions::concurrency`] sizes the session pool for both, and here also the worker
+    /// threads that drive it -- one per session, grown and retired with the pool.
     pub async fn with_options(path: impl AsRef<Path>, options: OpenOptions) -> Result<Self> {
         Self::open(path, Some(options)).await
     }

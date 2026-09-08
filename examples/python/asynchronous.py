@@ -54,7 +54,7 @@ async def ordinary_commands(client):
 
 
 async def commands_in_parallel(client):
-    """Eight commands at once cost about what one does: the engine runs them on eight strands,
+    """Eight commands at once cost about what one does: the engine runs them on eight sessions,
     and awaiting them costs the loop eight parked tasks."""
     for index in range(8):
         await client.app[f"numbers_{index}"].insert_many(

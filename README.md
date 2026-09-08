@@ -33,7 +33,7 @@ process.**
   - 🟨 **Node.js** — `@0q/embedded-mongodb`, the MongoDB Node.js driver over the same engine,
     and the URI scheme that mongosh understands.
 - 💾 **Persistent storage** — clean close and reopen cycles preserve data in the supplied directory.
-- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of command strands, up to a configurable count.
+- 🧵 **Parallel access** — share one client across threads; commands run in parallel over a pool of sessions, fixed at a chosen size or grown and shrunk on demand between a floor and a ceiling.
 - 🆔 **Automatic IDs** — missing `_id` fields receive an `ObjectId`, matching the official drivers.
 
 ## Deployment model
@@ -139,7 +139,7 @@ again to see the result.
 ## Quick start
 
 Open a directory, insert a document, and query it back. The crate-root API is async — every
-command is dispatched to a pool of dedicated engine threads (one per command strand, eight by
+command is dispatched to a pool of dedicated engine threads (one per session, eight by
 default), so an `.await` parks a task, never a runtime thread:
 
 ```rust
@@ -187,7 +187,7 @@ The cache and the free-space floors are left where they were, and all five are s
 | Journal pre-allocation | off (mongod: on) | `Client::with_options` |
 | WiredTiger cache | 256 MB | `Client::with_options` |
 | Free disk to start an index build or spill a query | 500 MB, as mongod | `Client::with_options`, or `Client::process_limits` at any time |
-| Parallel commands (strand pool) | 8 | `Client::with_options` |
+| Parallel commands (session pool) | 8, fixed | `Client::with_options` |
 
 The cache figure is the value this engine has always used, and is also the floor mongod will
 not go below on a server; mongod's *default* is half of system memory above the first
@@ -196,14 +196,32 @@ grows into rather than memory it takes, and a cold read-only process at Ireland 
 well under it, so it is exposed for tuning rather than because the default is wrong.
 
 ```rust
-use embedded_mongodb::{Client, CommandStrands, FreeDiskFloor, JournalFileSize, OpenOptions};
+use embedded_mongodb::{Client, Concurrency, FreeDiskFloor, JournalFileSize, OpenOptions};
 
 let options = OpenOptions::new()
     .journal_file_size(JournalFileSize::from_kibibytes(2048)?)
     .free_disk_floor(FreeDiskFloor::from_mebibytes(32)?)
-    .command_strands(CommandStrands::from_count(4)?);
+    .concurrency(Concurrency::from_count(4)?);
 let client = Client::with_options("./data", options).await?;
 ```
+
+### Auto-scaling concurrency
+
+`Concurrency::from_count` fixes the pool at a size chosen up front. A caller that cannot predict
+its own concurrency can name a range instead, and let the pool find it:
+
+```rust
+use std::time::Duration;
+use embedded_mongodb::{Client, Concurrency, OpenOptions};
+
+let elastic = Concurrency::dynamic(1, 32, Duration::from_secs(60))?;
+let client = Client::with_options("./data", OpenOptions::new().concurrency(elastic)).await?;
+```
+
+That opens one session, opens more — up to 32 — whenever a command arrives with every session
+busy, and closes the extras once they have sat idle for a minute. The ceiling is then a limit
+rather than a cost: nothing is paid for concurrency that never happens. The async client's
+worker threads follow the same policy, one per session, so the two scale together.
 
 Anything left unset keeps the engine's own default, so `Client::new(path)` and
 `Client::with_options(path, OpenOptions::new())` open identically.
@@ -280,7 +298,7 @@ asyncio.run(main())
 ```
 
 No command ever occupies the event loop: the engine's own worker threads do the blocking, and
-awaiting costs a parked task. Commands run in parallel over the same eight strands, so
+awaiting costs a parked task. Commands run in parallel over the same eight sessions, so
 `asyncio.gather` over eight of them takes about as long as one.
 
 **Cancelling really cancels.** Dropping the future stops the engine rather than only stopping the
@@ -354,7 +372,7 @@ aggregations, and bulk document sequences. Authentication, TLS, compression, ses
 transactions, change streams and exhaust cursors are not supported.
 
 Threads and tasks both run in parallel. Every connection PyMongo hands out reaches the same
-engine, which runs commands over a pool of eight command strands, so eight of them issue eight
+engine, which runs commands over a pool of eight sessions, so eight of them issue eight
 commands at once rather than queueing behind one another. PyMongo's own `maxPoolSize` is the
 other ceiling, and a fan-out gets the smaller of the two.
 
@@ -667,9 +685,9 @@ is linked statically, which costs a couple of megabytes and keeps a published li
   lifecycle and Bazel dependency work.
 - Many server components assume one global runtime. Multiple simultaneous `Client` values or
   different active database directories are rejected.
-- Commands issued through one `Client` are thread-safe and run in parallel up to the engine's
-  command-strand count (`OpenOptions::command_strands`, default 8); commands beyond it wait for
-  a strand to come free.
+- Commands issued through one `Client` are thread-safe and run in parallel up to the session
+  pool's ceiling (`OpenOptions::concurrency`, default 8 fixed sessions); commands beyond it wait
+  for a session to come free.
 - There is no process isolation: a MongoDB fatal invariant, memory fault, or abort terminates the
   Rust host.
 - Authentication, replication, transactions, change streams, TTL, backup, encryption, and the

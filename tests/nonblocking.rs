@@ -8,7 +8,7 @@
 mod scratch;
 
 use embedded_mongodb::{
-    Client, CommandStrands, Error, OpenOptions,
+    Client, Concurrency, Error, OpenOptions,
     bson::{Bson, Document, doc, oid::ObjectId},
 };
 use serde::{Deserialize, Serialize};
@@ -21,8 +21,8 @@ struct Item {
     name: String,
 }
 
-/// How many queries the speedup measurement fans out -- the default strand pool, so every
-/// one of them can hold a strand at once.
+/// How many queries the speedup measurement fans out -- the default session pool, so every one
+/// of them can hold a session at once.
 const QUERIES: usize = 8;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -146,7 +146,7 @@ async fn the_async_api_works_end_to_end_and_in_parallel() {
         assert!(
             parallel < sequential.mul_f64(0.75),
             "{QUERIES} parallel queries took {parallel:?} against {sequential:?} run one at a \
-             time on {cores} cores -- the strand pool is not running commands in parallel"
+             time on {cores} cores -- the session pool is not running commands in parallel"
         );
     }
 
@@ -156,8 +156,7 @@ async fn the_async_api_works_end_to_end_and_in_parallel() {
     // serves. The cursor comes from a fresh open so it has batches left to want.
     let client = Client::with_options(
         &path,
-        OpenOptions::new()
-            .command_strands(CommandStrands::from_count(2).expect("2 strands is in range")),
+        OpenOptions::new().concurrency(Concurrency::from_count(2).expect("2 sessions is in range")),
     )
     .await
     .unwrap();

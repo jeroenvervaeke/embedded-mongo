@@ -1,5 +1,5 @@
 //! The async API: the blocking layer's types re-spoken in `async fn`, dispatched onto a pool
-//! of worker threads sized to the engine's command strands.
+//! of worker threads sized by the same concurrency policy as the engine's sessions.
 //!
 //! Nothing here talks to the engine except through [`engine::Engine`], and everything here
 //! builds its commands with the same functions the blocking layer runs -- `find`, `insert`
@@ -18,7 +18,10 @@ mod engine;
 mod find;
 mod insert;
 mod process;
+mod queue;
 mod shutdown;
+mod state;
+mod workers;
 
 pub use client::Client;
 pub use collection::Collection;

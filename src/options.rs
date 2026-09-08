@@ -2,8 +2,8 @@
 //!
 //! Some of these reach the engine while WiredTiger is being opened and cannot be changed
 //! afterwards; one is a pair of server parameters set on the running engine; and one --
-//! [`OpenOptions::command_strands`] -- never reaches the engine at all. It sizes the pool of
-//! sessions this crate opens over the engine, which is a decision the safe Rust layer makes
+//! [`OpenOptions::concurrency`] -- never reaches the engine at all. It is the policy by which
+//! this crate opens sessions over the engine, which is a decision the safe Rust layer makes
 //! rather than a knob the native library carries. The split matters to the implementation and
 //! not to the caller, so it is hidden here.
 //!
@@ -16,6 +16,7 @@ use crate::limits::FreeDiskFloor;
 use embedded_mongodb_sys::{
     CacheSize, EngineOptions, JournalFileSize, OutOfRange, Preallocation, check_range,
 };
+use std::time::Duration;
 
 /// Storage limits for [`crate::Client::with_options`]. Anything left unset keeps the engine's
 /// own default, so `Client::new(path)` and `Client::with_options(path, OpenOptions::new())`
@@ -25,24 +26,45 @@ use embedded_mongodb_sys::{
 pub struct OpenOptions {
     pub(crate) engine: EngineOptions,
     pub(crate) free_disk_floor: Option<FreeDiskFloor>,
-    pub(crate) command_strands: Option<CommandStrands>,
+    pub(crate) concurrency: Option<Concurrency>,
 }
 
-/// How many commands the engine will run in parallel.
+/// How many commands the engine may run in parallel, and whether that number moves.
 ///
-/// Each is a session -- a MongoDB client, the embedded equivalent of a connection -- so this
-/// is the engine's connection count: parallel commands beyond it wait for a session to come
-/// free rather than failing. It is a count of sessions, and a session only does work while a
-/// thread drives it, so it is also how many worker threads the async [`Client`](crate::Client)
-/// starts, and the most blocking callers that can run at once before one waits.
+/// Each parallel command is a session -- a MongoDB client, the embedded equivalent of a
+/// connection -- so this is the engine's connection policy: commands past the ceiling wait for
+/// a session to come free rather than failing. A session only does work while a thread drives
+/// it, so the same policy sizes the async [`Client`](crate::Client)'s worker threads.
+///
+/// There are two shapes.
+///
+/// - [`from_count`](Concurrency::from_count) is a **fixed** pool: exactly that many sessions,
+///   opened at open time and kept for the life of the client. What to reach for when the
+///   caller knows its own concurrency.
+/// - [`dynamic`](Concurrency::dynamic) is an **elastic** pool: `min` sessions opened up front,
+///   more opened on demand up to `max` while every session is busy, and sessions idle past
+///   `idle_timeout` closed again down to `min`. What to reach for when the caller cannot
+///   predict its concurrency -- the bindings especially -- because `max` is then a ceiling
+///   rather than a cost.
 ///
 /// It is a decision of this crate, not of the native engine: the engine would run thousands of
 /// sessions, and nothing about how many to open is written into the C ABI. So this is validated
 /// and defaulted here, in Rust, and changing either costs no native rebuild.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CommandStrands(u32);
+///
+/// The fields are private because two of them constrain each other: `min` above `max` and a
+/// zero idle timeout -- which would close a session the instant it came back, and spin the
+/// reaper's timed wait doing it -- are refused by the constructors rather than left to be
+/// discovered at run time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Concurrency {
+    min: u32,
+    max: u32,
+    /// How long a session above `min` may sit idle before it is closed. `None` is a fixed
+    /// pool: it never opens a session beyond `min == max`, so it has nothing to reap.
+    idle_timeout: Option<Duration>,
+}
 
-impl CommandStrands {
+impl Concurrency {
     /// The floor is one session -- an engine that runs no commands in parallel is still an
     /// engine. The ceiling is this crate's own: a session that no thread is driving is an idle
     /// client, and 256 is far past where more parallelism on an embedded engine pays for the
@@ -50,28 +72,89 @@ impl CommandStrands {
     pub const MIN_COUNT: u32 = 1;
     pub const MAX_COUNT: u32 = 256;
 
-    /// What an open that names no count gets: eight, a small multiple of the cores on the
-    /// devices this engine targets. Enough that a caller who fans work out is not quietly
-    /// serialized, cheap enough that a caller who does not is out only a few idle clients.
+    /// What an open that names no policy gets: eight fixed sessions, a small multiple of the
+    /// cores on the devices this engine targets. Enough that a caller who fans work out is not
+    /// quietly serialized, cheap enough that a caller who does not is out only a few idle
+    /// clients.
     pub const DEFAULT_COUNT: u32 = 8;
 
-    /// The default as a value, so that resolving an unset option yields a `CommandStrands` --
+    /// The default as a value, so that resolving an unset option yields a `Concurrency` --
     /// carrying the "at least one" guarantee -- rather than a bare number.
-    pub const DEFAULT: Self = Self(Self::DEFAULT_COUNT);
+    pub const DEFAULT: Self = Self::preallocated(Self::DEFAULT_COUNT);
 
+    /// A fixed pool of `count` sessions: all of them opened at open time, none ever closed
+    /// before the client is. Today's behaviour, and the name it had.
     pub fn from_count(count: u32) -> Result<Self, OutOfRange> {
         check_range(
-            "command strands",
-            "strands",
+            "concurrency",
+            "sessions",
             count,
             Self::MIN_COUNT,
             Self::MAX_COUNT,
         )
-        .map(Self)
+        .map(Self::preallocated)
     }
 
-    pub fn count(self) -> u32 {
-        self.0
+    /// An elastic pool: `min` sessions up front, up to `max` while callers are waiting, and
+    /// sessions idle longer than `idle_timeout` closed back down to `min`.
+    ///
+    /// Refuses a `min` above `max`, either outside [`MIN_COUNT`](Concurrency::MIN_COUNT) and
+    /// [`MAX_COUNT`](Concurrency::MAX_COUNT), and an idle timeout under a millisecond -- which
+    /// includes zero, and which would close a session the moment it came back.
+    ///
+    /// A `min` equal to `max` is a fixed pool and is answered as one: there is no room above
+    /// the floor for a session to be spare in, so the timeout would name a reaper with nothing
+    /// it could ever close and put every worker on a wait it could never finish.
+    pub fn dynamic(min: u32, max: u32, idle_timeout: Duration) -> Result<Self, OutOfRange> {
+        let max = check_range(
+            "maximum concurrency",
+            "sessions",
+            max,
+            Self::MIN_COUNT,
+            Self::MAX_COUNT,
+        )?;
+        // Checked against the ceiling just validated, so `min > max` comes back as the range
+        // error it is rather than needing an error case of its own.
+        let min = check_range("minimum concurrency", "sessions", min, Self::MIN_COUNT, max)?;
+        // Saturating rather than wrapping: the floor exists to refuse zero, and a timeout past
+        // the 49 days a `u32` of milliseconds holds is nobody's mistake.
+        let millis = u32::try_from(idle_timeout.as_millis()).unwrap_or(u32::MAX);
+        check_range("idle timeout", "milliseconds", millis, 1, u32::MAX)?;
+        match min == max {
+            true => Ok(Self::preallocated(min)),
+            false => Ok(Self {
+                min,
+                max,
+                idle_timeout: Some(idle_timeout),
+            }),
+        }
+    }
+
+    /// Sessions opened before the first command runs.
+    pub fn min(self) -> u32 {
+        self.min
+    }
+
+    /// The ceiling: the most sessions that will ever be open at once, and so the most commands
+    /// that ever run in parallel.
+    pub fn max(self) -> u32 {
+        self.max
+    }
+
+    /// How long an idle session above [`min`](Concurrency::min) is kept before being closed,
+    /// or `None` for a fixed pool, which closes none.
+    pub fn idle_timeout(self) -> Option<Duration> {
+        self.idle_timeout
+    }
+
+    /// The unchecked fixed constructor, so that [`DEFAULT`](Concurrency::DEFAULT) can be a
+    /// `const` rather than an unwrap.
+    const fn preallocated(count: u32) -> Self {
+        Self {
+            min: count,
+            max: count,
+            idle_timeout: None,
+        }
     }
 }
 
@@ -106,29 +189,36 @@ impl OpenOptions {
         self
     }
 
-    /// How many commands may run in parallel -- the session-pool size. It sizes the async
-    /// [`Client`](crate::Client)'s worker threads, one per session, and bounds how many
-    /// blocking callers run at once. Left unset it is [`CommandStrands::DEFAULT_COUNT`].
-    pub fn command_strands(mut self, strands: CommandStrands) -> Self {
-        self.command_strands = Some(strands);
+    /// How many commands may run in parallel, and whether that number moves -- the
+    /// session-pool policy. It sizes the async [`Client`](crate::Client)'s worker threads, one
+    /// per session, and bounds how many blocking callers run at once. Left unset it is
+    /// [`Concurrency::DEFAULT`].
+    pub fn concurrency(mut self, concurrency: Concurrency) -> Self {
+        self.concurrency = Some(concurrency);
         self
     }
 
-    /// The session-pool size an open resolves to: what was asked for, or the default. Returns
-    /// the newtype, so the "at least one session" guarantee travels to the pool and the worker
-    /// count rather than being dropped for a bare `u32` at the boundary that relies on it.
-    pub(crate) fn strand_count(options: Option<&Self>) -> CommandStrands {
+    /// The session-pool policy an open resolves to: what was asked for, or the default.
+    /// Returns the newtype, so the "at least one session" guarantee travels to the pool and
+    /// the worker count rather than being dropped for a bare `u32` at the boundary that relies
+    /// on it.
+    pub(crate) fn resolve_concurrency(options: Option<&Self>) -> Concurrency {
         options
-            .and_then(|options| options.command_strands)
-            .unwrap_or(CommandStrands::DEFAULT)
+            .and_then(|options| options.concurrency)
+            .unwrap_or(Concurrency::DEFAULT)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandStrands, OpenOptions};
+    use super::{Concurrency, OpenOptions};
     use crate::limits::FreeDiskFloor;
     use embedded_mongodb_sys::{CacheSize, EngineOptions};
+    use std::time::Duration;
+
+    fn a_minute() -> Duration {
+        Duration::from_secs(60)
+    }
 
     #[test]
     fn an_untouched_options_object_asks_for_nothing() {
@@ -136,7 +226,7 @@ mod tests {
 
         assert_eq!(options.engine, EngineOptions::new());
         assert_eq!(options.free_disk_floor, None);
-        assert_eq!(options.command_strands, None);
+        assert_eq!(options.concurrency, None);
     }
 
     #[test]
@@ -151,21 +241,120 @@ mod tests {
     }
 
     #[test]
-    fn the_strand_count_defaults_when_unset_and_takes_what_is_asked() {
-        assert_eq!(OpenOptions::strand_count(None), CommandStrands::DEFAULT);
+    fn the_concurrency_defaults_when_unset_and_takes_what_is_asked() {
+        assert_eq!(OpenOptions::resolve_concurrency(None), Concurrency::DEFAULT);
 
         let asked = OpenOptions::new()
-            .command_strands(CommandStrands::from_count(3).expect("3 strands is in range"));
-        assert_eq!(OpenOptions::strand_count(Some(&asked)).count(), 3);
+            .concurrency(Concurrency::from_count(3).expect("3 sessions is in range"));
+        assert_eq!(OpenOptions::resolve_concurrency(Some(&asked)).max(), 3);
     }
 
     #[test]
-    fn a_strand_count_outside_the_range_is_refused() {
-        let error = CommandStrands::from_count(0).expect_err("0 strands is below the minimum");
+    fn a_fixed_pool_never_grows_and_never_reaps() {
+        let fixed = Concurrency::from_count(4).expect("4 sessions is in range");
+
+        assert_eq!(fixed.min(), 4);
+        assert_eq!(fixed.max(), 4);
+        assert_eq!(fixed.idle_timeout(), None);
+    }
+
+    #[test]
+    fn the_default_is_a_fixed_pool_of_the_default_count() {
+        assert_eq!(
+            Concurrency::DEFAULT,
+            Concurrency::from_count(Concurrency::DEFAULT_COUNT).expect("the default is in range")
+        );
+    }
+
+    #[test]
+    fn a_dynamic_pool_keeps_its_floor_ceiling_and_timeout() {
+        let elastic = Concurrency::dynamic(2, 16, a_minute()).expect("2..16 is in range");
+
+        assert_eq!(elastic.min(), 2);
+        assert_eq!(elastic.max(), 16);
+        assert_eq!(elastic.idle_timeout(), Some(a_minute()));
+    }
+
+    #[test]
+    fn a_fixed_count_outside_the_range_is_refused() {
+        let error = Concurrency::from_count(0).expect_err("0 sessions is below the minimum");
         assert_eq!(
             error.to_string(),
-            "command strands must be between 1 and 256 strands, got 0"
+            "concurrency must be between 1 and 256 sessions, got 0"
         );
-        assert!(CommandStrands::from_count(CommandStrands::MAX_COUNT + 1).is_err());
+        assert!(Concurrency::from_count(Concurrency::MAX_COUNT + 1).is_err());
+    }
+
+    #[test]
+    fn a_dynamic_ceiling_outside_the_range_is_refused() {
+        let error = Concurrency::dynamic(1, Concurrency::MAX_COUNT + 1, a_minute())
+            .expect_err("a ceiling above the maximum is out of range");
+        assert_eq!(
+            error.to_string(),
+            "maximum concurrency must be between 1 and 256 sessions, got 257"
+        );
+        assert!(Concurrency::dynamic(1, 0, a_minute()).is_err());
+    }
+
+    #[test]
+    fn a_dynamic_floor_above_its_ceiling_is_refused() {
+        let error = Concurrency::dynamic(9, 8, a_minute())
+            .expect_err("a floor above the ceiling is out of range");
+        assert_eq!(
+            error.to_string(),
+            "minimum concurrency must be between 1 and 8 sessions, got 9"
+        );
+    }
+
+    #[test]
+    fn a_dynamic_floor_below_the_minimum_is_refused() {
+        let error =
+            Concurrency::dynamic(0, 8, a_minute()).expect_err("0 sessions is below the minimum");
+        assert_eq!(
+            error.to_string(),
+            "minimum concurrency must be between 1 and 8 sessions, got 0"
+        );
+    }
+
+    #[test]
+    fn a_zero_idle_timeout_is_refused() {
+        let error = Concurrency::dynamic(1, 8, Duration::ZERO)
+            .expect_err("a session cannot be reaped the instant it is returned");
+        assert_eq!(
+            error.to_string(),
+            "idle timeout must be between 1 and 4294967295 milliseconds, got 0"
+        );
+    }
+
+    #[test]
+    fn an_idle_timeout_past_what_the_check_counts_is_still_accepted() {
+        let century = Duration::from_secs(60 * 60 * 24 * 365 * 100);
+
+        let elastic =
+            Concurrency::dynamic(1, 8, century).expect("a very long timeout is not a mistake");
+
+        assert_eq!(elastic.idle_timeout(), Some(century));
+    }
+
+    /// Two spellings of one pool have to *be* one pool: a policy with no room above its floor
+    /// has nothing a reaper could ever close, and keeping the timeout would start one anyway
+    /// and leave every worker waiting out a clock that can never fire.
+    #[test]
+    fn a_floor_equal_to_its_ceiling_is_the_fixed_pool_it_describes() {
+        let elastic = Concurrency::dynamic(4, 4, a_minute()).expect("4..4 is in range");
+
+        assert_eq!(
+            elastic,
+            Concurrency::from_count(4).expect("4 sessions is in range")
+        );
+        assert_eq!(elastic.idle_timeout(), None);
+    }
+
+    #[test]
+    fn an_idle_timeout_under_a_millisecond_is_refused() {
+        assert!(
+            Concurrency::dynamic(1, 8, Duration::from_micros(500)).is_err(),
+            "a floor of one millisecond is the floor, whatever the unit asked in"
+        );
     }
 }
