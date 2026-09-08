@@ -446,12 +446,14 @@ are not supported, and neither is Windows.
 
 ### mongosh
 
-A [fork of mongosh](https://github.com/jeroenvervaeke/mongosh) accepts the same URIs on the
-command line:
+A [fork of mongosh](https://github.com/jeroenvervaeke/mongosh) accepts the same URIs, and is
+published as `@0q/mongosh` so nothing needs installing:
 
 ```sh
-mongosh mongodb_embedded://./data
+npx @0q/mongosh mongodb_embedded://./data
 ```
+
+![mongosh opening ./data in-process, inserting and querying, and the directory afterwards](https://raw.githubusercontent.com/jeroenvervaeke/mongosh/feat/embedded-mongodb/packages/embedded-mongosh/demo.gif)
 
 It opens the directory through this package and talks to it over the driver it already
 carries, so `show dbs`, `db.items.find()` and the rest work as they do against a server.
