@@ -839,6 +839,30 @@ fn collection_administration(client: &Client) {
             .is_ok(),
         "buildInfo"
     );
+    // Reading the FCV parameter looks for its on-disk document through a replication
+    // StorageInterface this engine never installs; until patches/0009 that dereferenced null
+    // and took the process down on one of the first things mongosh asks after the handshake.
+    // The reply falls back to the in-memory FCV the engine started with.
+    let parameters = client
+        .run_command(
+            "admin",
+            &doc! { "getParameter": 1, "featureCompatibilityVersion": 1 },
+        )
+        .unwrap();
+    assert!(
+        parameters
+            .get_document("featureCompatibilityVersion")
+            .unwrap()
+            .get_str("version")
+            .is_ok(),
+        "featureCompatibilityVersion"
+    );
+    assert!(
+        client
+            .run_command("admin", &doc! { "getParameter": "*" })
+            .is_ok(),
+        "getParameter *"
+    );
 
     let validated = db.run_command(&doc! { "validate": "view_source" }).unwrap();
     assert!(
