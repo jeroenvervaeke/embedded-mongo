@@ -9,7 +9,8 @@
 //! Which jobs these threads take, and whether there should be more or fewer of them, is
 //! [`queue`](super::queue)'s to decide; this is what acts on it.
 
-use super::queue::{Job, Pool};
+use super::queue::Pool;
+use super::state::Job;
 use crate::{Error, OpenOptions, Result, client::Client as BlockingClient};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -19,12 +20,20 @@ use tokio::sync::oneshot;
 /// The workers' queue, over the client they run commands on.
 pub(super) type Workers = Pool<BlockingClient>;
 
-/// Opens the engine on the first worker thread and starts the rest once it is up.
+/// Starts the engine opening on its first worker thread, and answers the pool the workers are
+/// already serving along with the channel the open reports on.
+///
+/// Split from the awaiting so that the caller can hold the pool *before* it waits: an open
+/// whose future is dropped has to abandon what it started, and only something already holding
+/// the pool can do that on the way out. See [`Engine::open`](super::engine::Engine::open).
 ///
 /// The open itself -- storage startup, recovery, the one-time index repair scan -- is the
-/// longest block this crate ever does, which is why it happens on the worker rather than on
-/// the runtime the caller is awaiting from.
-pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<Arc<Workers>> {
+/// longest block this crate ever does, which is why it happens on the worker rather than on the
+/// runtime the caller is awaiting from.
+pub(super) fn start(
+    path: PathBuf,
+    options: Option<OpenOptions>,
+) -> Result<(Arc<Workers>, oneshot::Receiver<Result<()>>)> {
     // One worker per session the pool underneath may open: each worker holds exactly one
     // session for the length of a command, so this many run in parallel and none waits --
     // the pool's checkout is therefore uncontended when driven from here, though it still
@@ -43,6 +52,14 @@ pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<
             let client = match span.in_scope(|| open_blocking(&path, options)) {
                 Ok(client) => Arc::new(client),
                 Err(error) => {
+                    // Logged as well as sent: a caller that stopped awaiting -- a `timeout`
+                    // around the open -- is the one case where the reason an open failed would
+                    // otherwise go nowhere at all.
+                    tracing::warn!(
+                        target: "embedded_mongodb",
+                        error = %error,
+                        "the engine could not be opened"
+                    );
                     let _ = ready.send(Err(error));
                     return;
                 }
@@ -55,19 +72,17 @@ pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<
                 start_worker(&first, Arc::clone(&client), first.worker_started());
             }
             first.opened(Arc::clone(&client));
-            // A caller that dropped the opening future has no way left to reach the engine,
-            // so the pool is abandoned on its behalf: the workers finish what is queued and
-            // let go, and the last handle out closes what was just opened.
-            if ready.send(Ok(())).is_err() {
-                first.abandon();
-                return;
-            }
+            // Nothing is decided by whether this arrives. A caller that stopped awaiting has
+            // already dropped its handle on the pool, which abandons it; this thread then finds
+            // the queue dry and lets go like any other worker. Answering the send itself would
+            // miss the case that matters -- a future dropped just *after* a successful send --
+            // and leave the engine open with nobody able to reach it.
+            let _ = ready.send(Ok(()));
             serve(client, first);
         })
         .map_err(Error::EngineThread)?;
 
-    opened.await.map_err(|_| Error::Closed)??;
-    Ok(workers)
+    Ok((workers, opened))
 }
 
 /// Starts one worker on a count the pool has already made. A pool short a worker still runs
@@ -91,27 +106,46 @@ pub(super) fn start_worker(workers: &Arc<Workers>, client: Arc<BlockingClient>, 
             error = %error,
             "an engine worker thread could not be started"
         );
-        if let Some(Job::Stop(shutdown)) = workers.spawn_failed() {
+        if let Some(shutdown) = workers.spawn_failed() {
             shutdown.retire(client);
         }
     }
 }
 
 fn serve(client: Arc<BlockingClient>, workers: Arc<Workers>) {
+    workers.worker_ready();
+    // Held through the pool, which takes it back under the same lock that stops counting this
+    // worker: an engine handle let go a moment later would make the close rendezvous's claim
+    // -- that the retiring workers hold every last reference -- briefly false.
+    let mut held = Some(client);
     // `None` retires this worker: it waited out the idle timeout with the pool able to spare
-    // it, or every handle on the engine is gone and the queue has run dry. Either way its own
-    // reference to the engine goes with it, and if it was the last one the engine closes.
-    while let Some(job) = workers.next_job() {
+    // it, or every handle on the engine is gone and the queue has run dry. Either way its
+    // reference to the engine has gone with it, and if it was the last the engine closes.
+    while let Some(job) = workers.next_job(&mut held) {
+        let client = held
+            .as_ref()
+            .expect("a worker holds its handle until the job it is answered is `None`");
         match job {
             // Caught so that a panicking command fails only that command -- its reply channel
             // drops, which the awaiting caller sees as an error -- rather than unwinding this
             // worker out of the pool, which would leave `close` one `retire` short and hang it
             // forever. The client is behind the FFI's own locks, so proceeding is sound.
             Job::Run(operation) => {
-                let _ = catch_unwind(AssertUnwindSafe(|| operation(&client)));
+                if catch_unwind(AssertUnwindSafe(|| operation(client))).is_err() {
+                    // The caller sees only `Closed`, which it also sees for a real close, so
+                    // without this there is nothing anywhere to tell the two apart.
+                    tracing::error!(
+                        target: "embedded_mongodb",
+                        "a command panicked; its caller will see the engine as closed"
+                    );
+                }
             }
             Job::Stop(shutdown) => {
-                shutdown.retire(client);
+                // Taken rather than cloned: the rendezvous counts handles, and the one this
+                // worker was holding is the one it deposits.
+                if let Some(client) = held.take() {
+                    shutdown.retire(client);
+                }
                 return;
             }
         }

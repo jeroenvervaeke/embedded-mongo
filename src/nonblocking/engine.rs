@@ -12,7 +12,7 @@
 //! [`workers`](super::workers) acts on it; what is here is the handle, and turning one call
 //! into one job.
 
-use super::queue::{Job, Spawn};
+use super::state::{Job, Spawn};
 use super::workers::{self, Workers, start_worker};
 use crate::{Error, OpenOptions, Result, client::Client as BlockingClient, pool::CommandSlot};
 use std::path::PathBuf;
@@ -35,14 +35,22 @@ struct Handle {
 }
 
 impl Engine {
-    /// Opens the engine, and answers a handle on the workers now serving it. Everything the
+    /// Opens the engine, and answers the handle on the workers now serving it. Everything the
     /// open does -- the thread that carries it, the floor of workers started behind it -- is in
-    /// [`workers::open`](super::workers::open); this is only what wraps the result.
+    /// [`workers::start`](super::workers::start); this is what waits for it.
+    ///
+    /// The handle is built *before* the wait, so that a caller who stops waiting -- a `timeout`
+    /// around the open, a losing `select!` branch -- drops it and abandons the engine that was
+    /// opening. Waiting first and building it after would leave a fully open engine that
+    /// nothing can reach and nothing will close, and this crate opens one engine per process,
+    /// so that is a process that can never open a database again.
     pub(super) async fn open(path: PathBuf, options: Option<OpenOptions>) -> Result<Self> {
-        let workers = workers::open(path, options).await?;
-        Ok(Self {
+        let (workers, opened) = workers::start(path, options)?;
+        let engine = Self {
             handle: Arc::new(Handle { workers }),
-        })
+        };
+        opened.await.map_err(|_| Error::Closed)??;
+        Ok(engine)
     }
 
     /// Runs `operation` on a worker thread and hands its answer back across an await.

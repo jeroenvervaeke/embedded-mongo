@@ -20,6 +20,7 @@ mod insert;
 mod process;
 mod queue;
 mod shutdown;
+mod state;
 mod workers;
 
 pub use client::Client;
