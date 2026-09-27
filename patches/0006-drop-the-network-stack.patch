@@ -109,7 +109,7 @@
          "//src/mongo/util/concurrency:thread_pool",
 @@ -2577,7 +2573,6 @@
          # please add that library here, as a private library dependency.
-         ":landlock",
+         ":landlock_init",
          "//src/mongo/executor:async_rpc_error_info",
 -        "//src/mongo/executor:network_interface_factory",
          "//src/mongo/logv2/log_metric_initializer",
@@ -178,7 +178,7 @@
 -        "//src/mongo/client:clientdriver_network",
          "//src/mongo/db:dbmessage",
          "//src/mongo/db:service_context_test_fixture",
-         "//src/mongo/db/auth:authmocks",
+         "//src/mongo/db/admission:egress_response_rate_limiter",
 --- a/src/mongo/shell/BUILD.bazel
 +++ b/src/mongo/shell/BUILD.bazel
 @@ -151,7 +151,6 @@
@@ -305,8 +305,8 @@
 --- a/src/mongo/db/storage/BUILD.bazel
 +++ b/src/mongo/db/storage/BUILD.bazel
 @@ -708,7 +708,6 @@
+         "//src/mongo/db/storage/kv:kv_drop_pending_ident_reaper",
          "//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
-         "//src/mongo/db/storage/wiredtiger:wiredtiger_record_store_test_harness",
          "//src/mongo/db/timeseries:timeseries_options",
 -        "//src/mongo/executor:network_interface_factory",
          "//src/mongo/executor:network_interface_mock",

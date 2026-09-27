@@ -1,5 +1,5 @@
 diff --git a/src/mongo/db/BUILD.bazel b/src/mongo/db/BUILD.bazel
-index 87c78b13..ddae8096 100644
+index 40211a35e..ac46d6a69 100644
 --- a/src/mongo/db/BUILD.bazel
 +++ b/src/mongo/db/BUILD.bazel
 @@ -910,41 +910,26 @@ mongo_cc_library(
@@ -54,7 +54,7 @@ index 87c78b13..ddae8096 100644
          "//src/mongo/db/fts:base_fts",
          "//src/mongo/db/matcher:expressions_mongod_only",
          "//src/mongo/db/memory_tracking",
-@@ -1023,7 +1006,6 @@ mongo_cc_library(
+@@ -1024,7 +1007,6 @@ mongo_cc_library(
          "//src/mongo/db/query/query_settings",
          "//src/mongo/db/query/query_stats",
          "//src/mongo/db/query/query_stats/plan_shape_counters",
@@ -63,7 +63,7 @@ index 87c78b13..ddae8096 100644
          "//src/mongo/db/query/util:field_set",
          "//src/mongo/db/query/write_ops:canonical_update_and_delete",
 diff --git a/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp b/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
-index 54e3b689..bac761b2 100644
+index 54e3b689b..bac761b2c 100644
 --- a/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
 +++ b/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
 @@ -9,7 +9,6 @@
@@ -98,7 +98,7 @@ index 54e3b689..bac761b2 100644
      return std::make_unique<PrimaryWithFallbackSingleDocumentLookupExecutor>(
          std::move(primary), std::move(aggExecutor));
 diff --git a/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp b/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
-index c5e79611..b1085a03 100644
+index c5e79611b..b1085a03b 100644
 --- a/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
 +++ b/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
 @@ -10,7 +10,6 @@
@@ -134,10 +134,10 @@ index c5e79611..b1085a03 100644
      // Local-read path: `$match`-on-_id (optionally + view pipeline) against the stashed
      // acquisition.
 diff --git a/src/mongo/db/pipeline/BUILD.bazel b/src/mongo/db/pipeline/BUILD.bazel
-index 1bf5086f..bf8b9bbd 100644
+index 60bf39dc5..5259eb8ad 100644
 --- a/src/mongo/db/pipeline/BUILD.bazel
 +++ b/src/mongo/db/pipeline/BUILD.bazel
-@@ -1053,7 +1053,6 @@ mongo_cc_library(
+@@ -1057,7 +1057,6 @@ mongo_cc_library(
          ":pipeline",
          "//src/mongo/db/exec/single_doc_lookup:collection_acquirer",
          "//src/mongo/db/exec/single_doc_lookup:local_lookup_eligibility",
@@ -145,7 +145,7 @@ index 1bf5086f..bf8b9bbd 100644
          "//src/mongo/db/exec/single_doc_lookup:single_document_lookup_executor",
          "//src/mongo/db/query:query_knobs",
          "//src/mongo/db/query/query_knobs:query_knob_configuration",
-@@ -1110,7 +1109,6 @@ mongo_cc_library(
+@@ -1114,7 +1113,6 @@ mongo_cc_library(
          "//src/mongo/db/exec/single_doc_lookup:collection_acquirer",
          "//src/mongo/db/exec/single_doc_lookup:express_single_document_lookup_executor",
          "//src/mongo/db/exec/single_doc_lookup:local_lookup_eligibility_factory",
@@ -154,10 +154,10 @@ index 1bf5086f..bf8b9bbd 100644
          "//src/mongo/db/exec/single_doc_lookup:single_document_lookup_stats",
          "//src/mongo/db/pipeline",
 diff --git a/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp b/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
-index 88b31636..b0e9961e 100644
+index 4d0d94bf8..b4066e311 100644
 --- a/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
 +++ b/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
-@@ -430,43 +430,11 @@ void SamplingEstimatorImpl::executeSamplingQueryAndSample(
+@@ -437,43 +437,11 @@ void SamplingEstimatorImpl::executeSamplingQueryAndSample(
      std::pair<std::unique_ptr<sbe::PlanStage>, mongo::stage_builder::PlanStageData>& plan,
      std::unique_ptr<CanonicalQuery> cq,
      std::unique_ptr<PlanYieldPolicySBE> sbeYieldPolicy) {
@@ -207,13 +207,18 @@ index 88b31636..b0e9961e 100644
  
  void SamplingEstimatorImpl::generateFullCollScanSample() {
 diff --git a/src/mongo/db/query/compiler/optimizer/join/executor.cpp b/src/mongo/db/query/compiler/optimizer/join/executor.cpp
-index 66d06078..88555c8b 100644
+index 79cbdf141..c47ccca96 100644
 --- a/src/mongo/db/query/compiler/optimizer/join/executor.cpp
 +++ b/src/mongo/db/query/compiler/optimizer/join/executor.cpp
-@@ -298,23 +298,7 @@ lowerToSbePlanStageTree(OperationContext* opCtx,
-                         const QuerySolution& soln,
+@@ -322,28 +322,7 @@ lowerToSbePlanStageTree(OperationContext* opCtx,
                          const cost_based_ranker::EstimateMap* estimates,
-                         bool prepare) {
+                         bool prepare,
+                         OpDebug::JoinOptimizationMetrics& metrics) {
+-    Timer sbeLoweringTimer;
+-    ON_BLOCK_EXIT([&]() { metrics.sbeLoweringTimeMicros = sbeLoweringTimer.micros(); });
+-    sleepWhileLoweringJoinPlanToSbe.execute(
+-        [](const BSONObj& data) { sleepmillis(data["ms"].numberInt()); });
+-
 -    auto& baseCQ = *graph.accessPathAt(baseNode);
 -    auto baseNss = baseCQ.nss();
 -    auto sbeYieldPolicy = PlanYieldPolicySBE::make(opCtx, yieldPolicy, mca, baseNss);
@@ -234,12 +239,12 @@ index 66d06078..88555c8b 100644
 +    uasserted(ErrorCodes::QueryFeatureNotAllowed, "the slot-based execution engine is not part of this build; see docs/native-size-reduction.md");
  }
  
- std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> checkPlanCacheForPlan(
+ /**
 diff --git a/src/mongo/db/query/explain.cpp b/src/mongo/db/query/explain.cpp
-index 718db469..5167677a 100644
+index 2781f917b..caf331a72 100644
 --- a/src/mongo/db/query/explain.cpp
 +++ b/src/mongo/db/query/explain.cpp
-@@ -751,12 +751,10 @@ void Explain::planCacheEntryToBSON(const sbe::PlanCacheEntry& entry, BSONObjBuil
+@@ -802,12 +802,10 @@ void Explain::planCacheEntryToBSON(const sbe::PlanCacheEntry& entry, BSONObjBuil
  
      appendBasicPlanCacheEntryInfoToBSON(entry, out);
  
@@ -256,10 +261,10 @@ index 718db469..5167677a 100644
      out->append("indexFilterSet", entry.cachedPlan->indexFilterApplied);
      out->append("isPinned", entry.isPinned());
 diff --git a/src/mongo/db/query/get_executor.cpp b/src/mongo/db/query/get_executor.cpp
-index 98e90365..d37211eb 100644
+index 58dd7ed86..f97f6f5be 100644
 --- a/src/mongo/db/query/get_executor.cpp
 +++ b/src/mongo/db/query/get_executor.cpp
-@@ -826,42 +826,16 @@ protected:
+@@ -827,42 +827,16 @@ protected:
      std::unique_ptr<SbeWithClassicRuntimePlanningResult> buildSingleSolutionPlan(
          std::unique_ptr<QuerySolution> solution,
          boost::optional<PlanExplainerData> maybeExplainData) final {
@@ -305,7 +310,7 @@ index 98e90365..d37211eb 100644
      }
  
      // If there is a matching cache entry, this is the hash of that plan.
-@@ -910,11 +884,7 @@ private:
+@@ -911,11 +885,7 @@ private:
  
                  auto result = releaseResult();
  
@@ -318,7 +323,7 @@ index 98e90365..d37211eb 100644
  
                  planCacheCounters.incrementClassicHitsCounter();
                  return result;
-@@ -1059,14 +1029,7 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getExecutorFind
+@@ -1060,14 +1030,7 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getExecutorFind
  
      if (canonicalQuery->getExpCtx()->getIfrContext()->getSavedFlagValue(
              feature_flags::gFeatureFlagGetExecutorDeferredEngineChoice)) {
@@ -334,7 +339,7 @@ index 98e90365..d37211eb 100644
      }
  
      auto expressResult =
-@@ -1162,30 +1125,9 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getSearchMetada
+@@ -1163,30 +1126,9 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getSearchMetada
      const NamespaceString& nss,
      const ExpressionContext& expCtx,
      std::unique_ptr<executor::TaskExecutorCursor> metadataCursor) {
@@ -369,7 +374,7 @@ index 98e90365..d37211eb 100644
  
  namespace {
 diff --git a/src/mongo/db/query/plan_executor_factory.cpp b/src/mongo/db/query/plan_executor_factory.cpp
-index 9ac26cc3..0ebf3fef 100644
+index ac8cec142..0ebf3feff 100644
 --- a/src/mongo/db/query/plan_executor_factory.cpp
 +++ b/src/mongo/db/query/plan_executor_factory.cpp
 @@ -122,37 +122,7 @@ std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
@@ -387,12 +392,12 @@ index 9ac26cc3..0ebf3fef 100644
 -    return {new PlanExecutorSBE(opCtx,
 -                                std::move(cq),
 -                                sbe::plan_ranker::CandidatePlan{
--                                    std::move(solution),
--                                    std::move(rootStage),
--                                    sbe::plan_ranker::CandidatePlanData{std::move(data)},
--                                    false /*exitedEarly*/,
--                                    Status::OK(),
--                                    planIsFromCache},
+-                                    .solution = std::move(solution),
+-                                    .root = std::move(rootStage),
+-                                    .data = sbe::plan_ranker::CandidatePlanData{std::move(data)},
+-                                    .exitedEarly = false,
+-                                    .status = Status::OK(),
+-                                    .fromPlanCache = planIsFromCache},
 -                                plannerOptions & QueryPlannerParams::RETURN_OWNED_DATA,
 -                                std::move(nss),
 -                                false /*isOpen*/,
@@ -440,10 +445,10 @@ index 9ac26cc3..0ebf3fef 100644
  
  std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
 diff --git a/src/mongo/db/query/query_execution_knobs.idl b/src/mongo/db/query/query_execution_knobs.idl
-index 5ebfd9c9..fa50ed92 100644
+index 7460680c7..6755b3cd1 100644
 --- a/src/mongo/db/query/query_execution_knobs.idl
 +++ b/src/mongo/db/query/query_execution_knobs.idl
-@@ -668,7 +668,8 @@ server_parameters:
+@@ -681,7 +681,8 @@ server_parameters:
              name: QueryFrameworkControl
              data: WithOnUpdateHook<synchronized_value<QueryFrameworkControlEnum>>
          default:
@@ -454,10 +459,10 @@ index 5ebfd9c9..fa50ed92 100644
          annotations:
              query_knob:
 diff --git a/src/mongo/db/query/query_feature_flags.idl b/src/mongo/db/query/query_feature_flags.idl
-index bfad88f8..71489b06 100644
+index 26346b00f..7d837b8a8 100644
 --- a/src/mongo/db/query/query_feature_flags.idl
 +++ b/src/mongo/db/query/query_feature_flags.idl
-@@ -479,8 +479,10 @@ feature_flags:
+@@ -481,8 +481,10 @@ feature_flags:
          description: "Feature flag to enable engine selection based on query plan, rather than query text."
          cpp_varname: gFeatureFlagGetExecutorDeferredEngineChoice
          fcv_gated: false
