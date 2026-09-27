@@ -23,7 +23,7 @@ of the pieces listed here.
     This work        https://github.com/jeroenvervaeke/embedded-mongo
 
     Upstream engine  https://github.com/mongodb/mongo
-    Pinned commit    e78de88ae7504aee707fd083c579c3f54eab50ab
+    Pinned commit    da457d58ef2415351ce6a2cc4a65c1bcedf8b725
 
     Modifications    patches/ in this repository, applied to the submodule by
                      scripts/apply-mongo-patches:

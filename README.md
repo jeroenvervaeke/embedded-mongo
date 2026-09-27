@@ -1,7 +1,7 @@
 # Embedded MongoDB
 
 [![CI](https://github.com/jeroenvervaeke/embedded-mongo/actions/workflows/ci.yml/badge.svg)](https://github.com/jeroenvervaeke/embedded-mongo/actions/workflows/ci.yml)
-[![MongoDB Community 9.1.0-alpha0](https://img.shields.io/badge/MongoDB_Community-9.1.0--alpha0-47A248?logo=mongodb&logoColor=white)](https://github.com/mongodb/mongo/tree/e78de88ae7504aee707fd083c579c3f54eab50ab)
+[![MongoDB Community 9.1.0](https://img.shields.io/badge/MongoDB_Community-9.1.0-47A248?logo=mongodb&logoColor=white)](https://github.com/mongodb/mongo/tree/da457d58ef2415351ce6a2cc4a65c1bcedf8b725)
 [![License: SSPL-1.0](https://img.shields.io/badge/license-SSPL--1.0-blue.svg)](LICENSE)
 
 **The MongoDB version of SQLite.**

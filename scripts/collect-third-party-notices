@@ -42,9 +42,12 @@ trap 'rm -rf "$work"' EXIT
 # link passes individual `.pic.o` files -- so a pattern matching only `.o` finds a single
 # component in a release build and reports success. The output `.so` and the version script
 # are the only other path-like entries, and neither is a dependency.
+#
+# The sed reduces a canonical repository name to the plain one the dispositions are keyed on:
+# `abseil-cpp+` and `+_repo_rules+mongot_localdev` under Bazel 8 and later, `~` before it.
 grep -oE '[^ ]*\.(o|lo|a)$' "$params" \
     | grep -oE '(src/third_party/[^/]+|external/[a-zA-Z0-9_.+~-]+)' \
-    | sed 's|~$||' | sort -u > "$work/linked"
+    | sed 's|[~+]$||; s|external/.*[~+]|external/|' | sort -u > "$work/linked"
 
 # A link this size always pulls in third-party code. One component means the pattern above
 # stopped matching, not that the library became self-contained.

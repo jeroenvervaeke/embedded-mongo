@@ -223,7 +223,25 @@ pub(crate) fn build_native(workspace_root: &Path, crate_root: &Path) -> PathBuf 
         log_path.display()
     );
 
-    mongo_root
-        .join("bazel-bin/external/mongot_localdev")
-        .join(NATIVE_LIBRARY)
+    // Bzlmod names the directory after the repository's canonical name, and its separator
+    // moved from `~` to `+` between Bazel 7 and 8, so look the directory up instead of
+    // spelling it.
+    let external = mongo_root.join("bazel-bin/external");
+    std::fs::read_dir(&external)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", external.display()))
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("mongot_localdev")
+        })
+        .map(|entry| entry.path().join(NATIVE_LIBRARY))
+        .find(|library| library.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "Bazel succeeded but left no {NATIVE_LIBRARY} under {}",
+                external.display()
+            )
+        })
 }

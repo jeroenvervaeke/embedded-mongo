@@ -1,8 +1,8 @@
 diff --git a/src/mongo/db/BUILD.bazel b/src/mongo/db/BUILD.bazel
-index 40211a35e..ac46d6a69 100644
+index a6cda1629..d95349e24 100644
 --- a/src/mongo/db/BUILD.bazel
 +++ b/src/mongo/db/BUILD.bazel
-@@ -910,41 +910,26 @@ mongo_cc_library(
+@@ -911,41 +911,26 @@ mongo_cc_library(
          "//src/mongo/db/exec/runtime_planners/classic_runtime_planner:planner_interface.cpp",
          "//src/mongo/db/exec/runtime_planners/classic_runtime_planner:single_solution_passthrough_planner.cpp",
          "//src/mongo/db/exec/runtime_planners/classic_runtime_planner:sub_planner.cpp",
@@ -43,9 +43,9 @@ index 40211a35e..ac46d6a69 100644
          "//src/mongo/db/query:plan_yield_policy_impl.cpp",
 -        "//src/mongo/db/query:sbe_trial_runtime_executor.cpp",
          "//src/mongo/db/query/compiler/ce/exact:exact_cardinality_impl.cpp",
+         "//src/mongo/db/query/compiler/ce/ndv:field_stats_loader.cpp",
          "//src/mongo/db/query/compiler/ce/sampling:persistent_sample_loader.cpp",
-         "//src/mongo/db/query/compiler/ce/sampling:sampling_estimator_impl.cpp",
-@@ -985,8 +970,6 @@ mongo_cc_library(
+@@ -988,8 +973,6 @@ mongo_cc_library(
          "//src/mongo/db/exec:working_set",
          "//src/mongo/db/exec/classic:recordid_deduplicator",
          "//src/mongo/db/exec/express:express_executor",
@@ -54,7 +54,7 @@ index 40211a35e..ac46d6a69 100644
          "//src/mongo/db/fts:base_fts",
          "//src/mongo/db/matcher:expressions_mongod_only",
          "//src/mongo/db/memory_tracking",
-@@ -1024,7 +1007,6 @@ mongo_cc_library(
+@@ -1029,7 +1012,6 @@ mongo_cc_library(
          "//src/mongo/db/query/query_settings",
          "//src/mongo/db/query/query_stats",
          "//src/mongo/db/query/query_stats/plan_shape_counters",
@@ -63,10 +63,10 @@ index 40211a35e..ac46d6a69 100644
          "//src/mongo/db/query/util:field_set",
          "//src/mongo/db/query/write_ops:canonical_update_and_delete",
 diff --git a/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp b/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
-index 54e3b689b..bac761b2c 100644
+index 76816484f..c8f96961e 100644
 --- a/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
 +++ b/src/mongo/db/exec/agg/change_stream_add_post_image_stage_fn.cpp
-@@ -9,7 +9,6 @@
+@@ -10,7 +10,6 @@
  #include "mongo/db/exec/single_doc_lookup/collection_acquirer.h"
  #include "mongo/db/exec/single_doc_lookup/express_single_document_lookup_executor.h"
  #include "mongo/db/exec/single_doc_lookup/local_lookup_eligibility_factory_impl.h"
@@ -74,18 +74,18 @@ index 54e3b689b..bac761b2c 100644
  #include "mongo/db/exec/single_doc_lookup/single_document_lookup_executor.h"
  #include "mongo/db/exec/single_doc_lookup/single_document_lookup_stats.h"
  #include "mongo/db/feature_flag.h"
-@@ -73,18 +72,13 @@ std::unique_ptr<exec::agg::SingleDocumentLookupExecutor> buildUpdateLookupExecut
+@@ -116,34 +115,13 @@ std::unique_ptr<exec::agg::SingleDocumentLookupExecutor> buildUpdateLookupExecut
      CurOp::get(opCtx)->debug().usesOptimizedUpdateLookup = true;
  
      LocalLookupEligibilityFactoryImpl eligibilityFactory;
--    std::unique_ptr<SingleDocumentLookupExecutor> primary;
--    if (isCollectionStream) {
--        primary = std::make_unique<SbeSingleDocumentLookupExecutor>(
+-    auto makeSbeExecutor = [&] {
+-        return std::make_unique<SbeSingleDocumentLookupExecutor>(
 -            std::make_unique<OnDemandCollectionAcquirer>(),
 -            eligibilityFactory.makeLocalLookupEligibility(opCtx),
 -            exec::SingleDocumentLookupStatsRecorder::makeUpdateLookupSbeRecorder());
--    } else {
--        primary = std::make_unique<ExpressSingleDocumentLookupExecutor>(
+-    };
+-    auto makeExpressExecutor = [&] {
+-        return std::make_unique<ExpressSingleDocumentLookupExecutor>(
 +    // This build links no slot-based execution engine, so the express executor serves the
 +    // collection-stream case too. It is the same point read by a different evaluator.
 +    std::unique_ptr<SingleDocumentLookupExecutor> primary =
@@ -93,12 +93,28 @@ index 54e3b689b..bac761b2c 100644
              std::make_unique<OnDemandCollectionAcquirer>(),
              eligibilityFactory.makeLocalLookupEligibility(opCtx),
              exec::SingleDocumentLookupStatsRecorder::makeUpdateLookupExpressRecorder());
+-    };
+-
+-    // When the failpoint forces a specific engine, install it as the sole executor so tests can
+-    // observe the selected engine via serverStatus metrics without fallback interference.
+-    if (forcedEngine == ForcedUpdateLookupEngine::kSbe) {
+-        return makeSbeExecutor();
+-    }
+-    if (forcedEngine == ForcedUpdateLookupEngine::kExpress) {
+-        return makeExpressExecutor();
+-    }
+-
+-    std::unique_ptr<SingleDocumentLookupExecutor> primary;
+-    if (isCollectionStream) {
+-        primary = makeSbeExecutor();
+-    } else {
+-        primary = makeExpressExecutor();
 -    }
  
      return std::make_unique<PrimaryWithFallbackSingleDocumentLookupExecutor>(
          std::move(primary), std::move(aggExecutor));
 diff --git a/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp b/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
-index c5e79611b..b1085a03b 100644
+index a9e74ad5c..ff26b20c4 100644
 --- a/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
 +++ b/src/mongo/db/exec/agg/search/internal_search_id_lookup_stage.cpp
 @@ -10,7 +10,6 @@
@@ -107,9 +123,9 @@ index c5e79611b..b1085a03b 100644
  #include "mongo/db/exec/single_doc_lookup/local_lookup_eligibility.h"
 -#include "mongo/db/exec/single_doc_lookup/sbe_single_document_lookup_executor.h"
  #include "mongo/db/exec/single_doc_lookup/single_document_lookup_executor.h"
+ #include "mongo/db/exec/single_doc_lookup/single_document_lookup_stats.h"
  #include "mongo/db/pipeline/expression_context.h"
- #include "mongo/db/query/query_execution_knobs_gen.h"
-@@ -86,21 +85,8 @@ std::unique_ptr<SingleDocumentLookupExecutor> buildIdLookupExecutor(
+@@ -87,28 +86,8 @@ std::unique_ptr<SingleDocumentLookupExecutor> buildIdLookupExecutor(
      const boost::intrusive_ptr<DSInternalSearchIdLookUpCatalogResourceHandle>&
          catalogResourceHandle,
      boost::optional<std::vector<BSONObj>> viewPipeline) {
@@ -117,35 +133,42 @@ index c5e79611b..b1085a03b 100644
 -    const bool optimizedLookupEnabled = ifrContext &&
 -        ifrContext->getSavedFlagValue(feature_flags::gFeatureFlagSearchOptimizedIdLookup);
 -
--    // Optimized fast path (flag on, no view): the SBE point-read executor, reusing the stage's
--    // upfront acquisition and caching a parameterized '{_id}' plan across the batch window. The
--    // lookup always runs local (search index is on-shard), so AlwaysLocalEligibility; a sharded
--    // collection's orphans are dropped by the SHARDING_FILTER the executor adds above the scan.
+-    // Optimized fast path (flag on, no view): SBE point-read, with the local-read executor as
+-    // fallback when SBE returns kNotHandled (e.g. object _id that SlotBinder cannot encode).
+-    // Search always runs local, so AlwaysLocalEligibility; a sharded collection's orphans are
+-    // dropped by the SHARDING_FILTER SBE adds above the scan.
 -    if (optimizedLookupEnabled && !viewPipeline) {
--        return std::make_unique<SbeSingleDocumentLookupExecutor>(
+-        auto sbe = std::make_unique<SbeSingleDocumentLookupExecutor>(
 -            std::make_unique<PreAcquiredCollectionAcquirer>(
 -                catalogResourceHandle->getStasher(),
 -                catalogResourceHandle->getCollectionForLookupExecutor()),
--            std::make_unique<AlwaysLocalEligibility>());
+-            std::make_unique<AlwaysLocalEligibility>(),
+-            exec::SingleDocumentLookupStatsRecorder::makeSearchIdLookupSbeRecorder());
+-        auto aggregation = std::make_unique<InternalSearchIdLookUpLocalReadExecutor>(
+-            catalogResourceHandle,
+-            boost::none /* view */,
+-            exec::SingleDocumentLookupStatsRecorder::makeSearchIdLookupAggregationRecorder());
+-        return std::make_unique<PrimaryWithFallbackSingleDocumentLookupExecutor>(
+-            std::move(sbe), std::move(aggregation));
 -    }
 +    // The optimized fast path here was the SBE point-read executor, which this build does not
 +    // link. The local-read path below serves every case.
  
-     // Local-read path: `$match`-on-_id (optionally + view pipeline) against the stashed
+     // Aggregation-executor path: `$match`-on-_id (optionally + view pipeline) against the stashed
      // acquisition.
 diff --git a/src/mongo/db/pipeline/BUILD.bazel b/src/mongo/db/pipeline/BUILD.bazel
-index 60bf39dc5..5259eb8ad 100644
+index 81d5d78b4..08e8b506f 100644
 --- a/src/mongo/db/pipeline/BUILD.bazel
 +++ b/src/mongo/db/pipeline/BUILD.bazel
-@@ -1057,7 +1057,6 @@ mongo_cc_library(
+@@ -1075,7 +1075,6 @@ mongo_cc_library(
          ":pipeline",
          "//src/mongo/db/exec/single_doc_lookup:collection_acquirer",
          "//src/mongo/db/exec/single_doc_lookup:local_lookup_eligibility",
 -        "//src/mongo/db/exec/single_doc_lookup:sbe_single_document_lookup_executor",
          "//src/mongo/db/exec/single_doc_lookup:single_document_lookup_executor",
+         "//src/mongo/db/exec/single_doc_lookup:single_document_lookup_stats",
          "//src/mongo/db/query:query_knobs",
-         "//src/mongo/db/query/query_knobs:query_knob_configuration",
-@@ -1114,7 +1113,6 @@ mongo_cc_library(
+@@ -1134,7 +1133,6 @@ mongo_cc_library(
          "//src/mongo/db/exec/single_doc_lookup:collection_acquirer",
          "//src/mongo/db/exec/single_doc_lookup:express_single_document_lookup_executor",
          "//src/mongo/db/exec/single_doc_lookup:local_lookup_eligibility_factory",
@@ -154,10 +177,10 @@ index 60bf39dc5..5259eb8ad 100644
          "//src/mongo/db/exec/single_doc_lookup:single_document_lookup_stats",
          "//src/mongo/db/pipeline",
 diff --git a/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp b/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
-index 4d0d94bf8..b4066e311 100644
+index be494003b..ce9893f14 100644
 --- a/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
 +++ b/src/mongo/db/query/compiler/ce/sampling/sampling_estimator_impl.cpp
-@@ -437,43 +437,11 @@ void SamplingEstimatorImpl::executeSamplingQueryAndSample(
+@@ -429,43 +429,11 @@ void SamplingEstimatorImpl::executeSamplingQueryAndSample(
      std::pair<std::unique_ptr<sbe::PlanStage>, mongo::stage_builder::PlanStageData>& plan,
      std::unique_ptr<CanonicalQuery> cq,
      std::unique_ptr<PlanYieldPolicySBE> sbeYieldPolicy) {
@@ -207,10 +230,10 @@ index 4d0d94bf8..b4066e311 100644
  
  void SamplingEstimatorImpl::generateFullCollScanSample() {
 diff --git a/src/mongo/db/query/compiler/optimizer/join/executor.cpp b/src/mongo/db/query/compiler/optimizer/join/executor.cpp
-index 79cbdf141..c47ccca96 100644
+index d3b44cb95..3b394c5fc 100644
 --- a/src/mongo/db/query/compiler/optimizer/join/executor.cpp
 +++ b/src/mongo/db/query/compiler/optimizer/join/executor.cpp
-@@ -322,28 +322,7 @@ lowerToSbePlanStageTree(OperationContext* opCtx,
+@@ -332,28 +332,7 @@ lowerToSbePlanStageTree(OperationContext* opCtx,
                          const cost_based_ranker::EstimateMap* estimates,
                          bool prepare,
                          OpDebug::JoinOptimizationMetrics& metrics) {
@@ -241,10 +264,10 @@ index 79cbdf141..c47ccca96 100644
  
  /**
 diff --git a/src/mongo/db/query/explain.cpp b/src/mongo/db/query/explain.cpp
-index 2781f917b..caf331a72 100644
+index 18f8a7315..3a35a1b20 100644
 --- a/src/mongo/db/query/explain.cpp
 +++ b/src/mongo/db/query/explain.cpp
-@@ -802,12 +802,10 @@ void Explain::planCacheEntryToBSON(const sbe::PlanCacheEntry& entry, BSONObjBuil
+@@ -825,12 +825,10 @@ void Explain::planCacheEntryToBSON(const sbe::PlanCacheEntry& entry, BSONObjBuil
  
      appendBasicPlanCacheEntryInfoToBSON(entry, out);
  
@@ -261,17 +284,17 @@ index 2781f917b..caf331a72 100644
      out->append("indexFilterSet", entry.cachedPlan->indexFilterApplied);
      out->append("isPinned", entry.isPinned());
 diff --git a/src/mongo/db/query/get_executor.cpp b/src/mongo/db/query/get_executor.cpp
-index 58dd7ed86..f97f6f5be 100644
+index 1c6aa29b1..0492738b3 100644
 --- a/src/mongo/db/query/get_executor.cpp
 +++ b/src/mongo/db/query/get_executor.cpp
-@@ -827,42 +827,16 @@ protected:
-     std::unique_ptr<SbeWithClassicRuntimePlanningResult> buildSingleSolutionPlan(
+@@ -836,47 +836,16 @@ protected:
          std::unique_ptr<QuerySolution> solution,
-         boost::optional<PlanExplainerData> maybeExplainData) final {
--        // TODO SERVER-92589: Support CBR with SBE plans
+         boost::optional<PlanExplainerData> maybeExplainData,
+         PlanSelectionStrategy planSelectionStrategy) final {
+-        // TODO SERVER-92589: Support CBR with SBE plans.
 -        auto result = this->releaseResult();
 -        result->runtimePlanner = std::make_unique<crp_sbe::SingleSolutionPassthroughPlanner>(
--            makePlannerData(), std::move(solution));
+-            makePlannerData(), std::move(solution), planSelectionStrategy);
 -        return result;
 +        uasserted(ErrorCodes::QueryFeatureNotAllowed, "the slot-based execution engine is not part of this build; see docs/native-size-reduction.md");
      }
@@ -297,20 +320,25 @@ index 58dd7ed86..f97f6f5be 100644
 -                 .getUseMultiplannerForSingleSolutions() &&
 -             !this->_cq->isSearchQuery())) {
 -            auto result = this->releaseResult();
--            result->runtimePlanner =
--                std::make_unique<crp_sbe::MultiPlanner>(this->makePlannerData(),
--                                                        std::move(planRankingResult.solutions),
--                                                        true /*shouldWriteToPlanCache*/);
+-            result->runtimePlanner = std::make_unique<crp_sbe::MultiPlanner>(
+-                this->makePlannerData(),
+-                std::move(planRankingResult.solutions),
+-                true /*shouldWriteToPlanCache*/,
+-                []() {
+-                } /*incrementReplannedPlanIsCachedPlanCounterCb*/,
+-                boost::none /*replanReason*/,
+-                planRankingResult.planSelectionStrategy);
 -            return result;
 -        } else {
 -            return this->buildSingleSolutionPlan(std::move(planRankingResult.solutions[0]),
--                                                 std::move(planRankingResult.maybeExplainData));
+-                                                 std::move(planRankingResult.maybeExplainData),
+-                                                 planRankingResult.planSelectionStrategy);
 -        }
 +        uasserted(ErrorCodes::QueryFeatureNotAllowed, "the slot-based execution engine is not part of this build; see docs/native-size-reduction.md");
      }
  
      // If there is a matching cache entry, this is the hash of that plan.
-@@ -911,11 +885,7 @@ private:
+@@ -925,11 +894,7 @@ private:
  
                  auto result = releaseResult();
  
@@ -323,7 +351,7 @@ index 58dd7ed86..f97f6f5be 100644
  
                  planCacheCounters.incrementClassicHitsCounter();
                  return result;
-@@ -1060,14 +1030,7 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getExecutorFind
+@@ -1067,14 +1032,7 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getExecutorFind
  
      if (canonicalQuery->getExpCtx()->getIfrContext()->getSavedFlagValue(
              feature_flags::gFeatureFlagGetExecutorDeferredEngineChoice)) {
@@ -339,7 +367,7 @@ index 58dd7ed86..f97f6f5be 100644
      }
  
      auto expressResult =
-@@ -1163,30 +1126,9 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getSearchMetada
+@@ -1175,30 +1133,9 @@ StatusWith<std::unique_ptr<PlanExecutor, PlanExecutor::Deleter>> getSearchMetada
      const NamespaceString& nss,
      const ExpressionContext& expCtx,
      std::unique_ptr<executor::TaskExecutorCursor> metadataCursor) {
@@ -374,13 +402,13 @@ index 58dd7ed86..f97f6f5be 100644
  
  namespace {
 diff --git a/src/mongo/db/query/plan_executor_factory.cpp b/src/mongo/db/query/plan_executor_factory.cpp
-index ac8cec142..0ebf3feff 100644
+index 087f4cf42..4c6879d9a 100644
 --- a/src/mongo/db/query/plan_executor_factory.cpp
 +++ b/src/mongo/db/query/plan_executor_factory.cpp
-@@ -122,37 +122,7 @@ std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
-     std::unique_ptr<RemoteExplainVector> remoteExplains,
+@@ -128,38 +128,7 @@ std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
      std::unique_ptr<MultiPlanStage> classicRuntimePlannerStage,
-     boost::optional<PlanExplainerData> maybeExplainData) {
+     boost::optional<PlanExplainerData> maybeExplainData,
+     boost::optional<PlanSelectionStrategy> planSelectionStrategy) {
 -    auto&& [rootStage, data] = root;
 -    sbe::DebugPrintInfo debugPrintInfo{};
 -    LOGV2_DEBUG(4822860,
@@ -410,16 +438,17 @@ index ac8cec142..0ebf3feff 100644
 -                                usedJoinOpt,
 -                                std::move(estimates),
 -                                std::move(rejectedJoinPlans),
--                                std::move(maybeExplainData)),
+-                                std::move(maybeExplainData),
+-                                planSelectionStrategy),
 -            PlanExecutor::Deleter{opCtx}};
 +    uasserted(ErrorCodes::QueryFeatureNotAllowed, "the slot-based execution engine is not part of this build; see docs/native-size-reduction.md");
  }
  
  std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
-@@ -166,26 +136,7 @@ std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
-     std::unique_ptr<RemoteCursorMap> remoteCursors,
+@@ -174,31 +143,7 @@ std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
      std::unique_ptr<RemoteExplainVector> remoteExplains,
-     boost::optional<size_t> cachedPlanHash) {
+     boost::optional<size_t> cachedPlanHash,
+     boost::optional<PlanSelectionStrategy> planSelectionStrategy) {
 -    sbe::DebugPrintInfo debugPrintInfo{};
 -    LOGV2_DEBUG(4822861,
 -                5,
@@ -438,14 +467,19 @@ index ac8cec142..0ebf3feff 100644
 -                                std::move(remoteCursors),
 -                                std::move(remoteExplains),
 -                                nullptr /*classicRuntimePlannerStage*/,
--                                collections),
+-                                collections,
+-                                false /*usedJoinOpt*/,
+-                                {} /*estimates*/,
+-                                {} /*rejectedJoinPlans*/,
+-                                boost::none /*maybeExplainData*/,
+-                                planSelectionStrategy),
 -            PlanExecutor::Deleter{opCtx}};
 +    uasserted(ErrorCodes::QueryFeatureNotAllowed, "the slot-based execution engine is not part of this build; see docs/native-size-reduction.md");
  }
  
  std::unique_ptr<PlanExecutor, PlanExecutor::Deleter> make(
 diff --git a/src/mongo/db/query/query_execution_knobs.idl b/src/mongo/db/query/query_execution_knobs.idl
-index 7460680c7..6755b3cd1 100644
+index 39bf2a814..18733da72 100644
 --- a/src/mongo/db/query/query_execution_knobs.idl
 +++ b/src/mongo/db/query/query_execution_knobs.idl
 @@ -681,7 +681,8 @@ server_parameters:
@@ -459,10 +493,10 @@ index 7460680c7..6755b3cd1 100644
          annotations:
              query_knob:
 diff --git a/src/mongo/db/query/query_feature_flags.idl b/src/mongo/db/query/query_feature_flags.idl
-index 26346b00f..7d837b8a8 100644
+index 5912b12f8..6e5e3e8d2 100644
 --- a/src/mongo/db/query/query_feature_flags.idl
 +++ b/src/mongo/db/query/query_feature_flags.idl
-@@ -481,8 +481,10 @@ feature_flags:
+@@ -420,8 +420,10 @@ feature_flags:
          description: "Feature flag to enable engine selection based on query plan, rather than query text."
          cpp_varname: gFeatureFlagGetExecutorDeferredEngineChoice
          fcv_gated: false

@@ -1,5 +1,57 @@
+diff --git a/src/mongo/db/BUILD.bazel b/src/mongo/db/BUILD.bazel
+index d95349e24..c0192f566 100644
+--- a/src/mongo/db/BUILD.bazel
++++ b/src/mongo/db/BUILD.bazel
+@@ -643,7 +643,6 @@ mongo_cc_unit_test(
+         "//src/mongo/db/admission/ticketing:ticketholder",
+         "//src/mongo/db/collection_crud",
+         "//src/mongo/db/query/client_cursor",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role",
+         "//src/mongo/db/shard_role/lock_manager:exception_util",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_control",
+@@ -2499,7 +2498,6 @@ mongo_cc_library(
+         "//src/mongo/db/repl:repl_server_parameters",
+         "//src/mongo/db/repl:replica_set_messages",
+         "//src/mongo/db/rss:disable_snapshotting_fail_point",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/session:session_catalog_mongod",
+         "//src/mongo/db/shard_role/lock_manager",
+         "//src/mongo/db/stats:api_version_metrics",
+@@ -3058,7 +3056,6 @@ mongo_cc_library(
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/storage:storage_control",
+         "//src/mongo/db/storage:storage_options",
+@@ -3504,7 +3501,6 @@ mongo_cc_library(
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/shard_role/shard_catalog:database_holder",
+         "//src/mongo/db/stats:top",
+@@ -3666,7 +3662,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/repl:storage_interface_impl",
+         "//src/mongo/db/rss/attached_storage:attached_persistence_provider",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/storage:storage_control",
+         "//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
+@@ -3698,7 +3693,6 @@ mongo_cc_benchmark(
+         "//src/mongo/db/repl:storage_interface_impl",
+         "//src/mongo/db/rss:persistence_provider_impl",
+         "//src/mongo/db/rss:service_lifecycle_impl",
+-        "//src/mongo/db/s:sharding_runtime_d",
+         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
+         "//src/mongo/db/shard_role/shard_catalog:database_holder",
+         "//src/mongo/db/storage:storage_control",
 diff --git a/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp b/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
-index 8ecc622a..eac70885 100644
+index 7aff757a5..53305385d 100644
 --- a/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
 +++ b/src/mongo/db/exec/agg/change_stream_handle_topology_change_v2_stage.cpp
 @@ -268,7 +268,8 @@ private:
@@ -63,7 +115,7 @@ index 8ecc622a..eac70885 100644
              // In case all shard ids are present in the updated shard registry, rethrow the original
              // exception. This can be a 'ShardNotFound' exception or any other type of exception.
 diff --git a/src/mongo/db/exec/classic/timeseries_modify.cpp b/src/mongo/db/exec/classic/timeseries_modify.cpp
-index 829a7507..af523681 100644
+index 829a75073..af5236815 100644
 --- a/src/mongo/db/exec/classic/timeseries_modify.cpp
 +++ b/src/mongo/db/exec/classic/timeseries_modify.cpp
 @@ -295,47 +295,8 @@ void TimeseriesModifyStage::_checkUpdateChangesExistingShardKey(const BSONObj& n
@@ -117,7 +169,7 @@ index 829a7507..af523681 100644
  
  void TimeseriesModifyStage::_checkUpdateChangesReshardingKey(const BSONObj& newBucket,
 diff --git a/src/mongo/db/exec/classic/timeseries_upsert.cpp b/src/mongo/db/exec/classic/timeseries_upsert.cpp
-index 0aca43b6..c57dcc3e 100644
+index 0aca43b6a..c57dcc3ea 100644
 --- a/src/mongo/db/exec/classic/timeseries_upsert.cpp
 +++ b/src/mongo/db/exec/classic/timeseries_upsert.cpp
 @@ -112,47 +112,9 @@ PlanStage::StageState TimeseriesUpsertStage::doWork(WorkingSetID* out) {
@@ -172,10 +224,10 @@ index 0aca43b6..c57dcc3e 100644
      }
      writeConflictRetry(opCtx(), "TimeseriesUpsert", collectionPtr()->ns(), [&] {
 diff --git a/src/mongo/db/op_observer/BUILD.bazel b/src/mongo/db/op_observer/BUILD.bazel
-index 9853f4bd..5f6fa78a 100644
+index 9f810f2c4..2a2938adb 100644
 --- a/src/mongo/db/op_observer/BUILD.bazel
 +++ b/src/mongo/db/op_observer/BUILD.bazel
-@@ -197,7 +197,6 @@ mongo_cc_library(
+@@ -198,7 +198,6 @@ mongo_cc_library(
          "//src/mongo:base",
          "//src/mongo/db/commands:mongod_fcv",
          "//src/mongo/db/pipeline:change_stream_expired_pre_image_remover",
@@ -183,16 +235,16 @@ index 9853f4bd..5f6fa78a 100644
          "//src/mongo/db/session:kill_sessions_local",
          "//src/mongo/executor:egress_connection_closer_manager",
      ],
-@@ -314,7 +313,6 @@ mongo_cc_benchmark(
-         "//src/mongo/db/auth:authserver",
+@@ -333,7 +332,6 @@ mongo_cc_benchmark(
          "//src/mongo/db/repl:primary_only_service",
          "//src/mongo/db/repl:replmocks",
+         "//src/mongo/db/rss/attached_storage:attached_persistence_provider",
 -        "//src/mongo/db/s:sharding_runtime_d",
          "//src/mongo/db/shard_role/shard_catalog:collection_mock",
          "//src/mongo/db/timeseries:timeseries_op_observer",
          "//src/mongo/db/topology/cluster_parameters:cluster_server_parameter_op_observer",
 diff --git a/src/mongo/db/pipeline/process_interface/common_process_interface.cpp b/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
-index 5a1a955b..5f9cf5b6 100644
+index 5a1a955b1..5f9cf5b6c 100644
 --- a/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
 +++ b/src/mongo/db/pipeline/process_interface/common_process_interface.cpp
 @@ -221,10 +221,8 @@ bool isIdIndexFullyUnique(const ShardKeyPattern* shardKeyPattern, const BSONObj&
@@ -356,10 +408,10 @@ index 5a1a955b..5f9cf5b6 100644
  
  }  // namespace mongo
 diff --git a/src/mongo/db/repl/BUILD.bazel b/src/mongo/db/repl/BUILD.bazel
-index de5a24d8..f85ee99b 100644
+index 3ab64b36f..6f562e6dc 100644
 --- a/src/mongo/db/repl/BUILD.bazel
 +++ b/src/mongo/db/repl/BUILD.bazel
-@@ -1305,7 +1305,6 @@ mongo_cc_library(
+@@ -1391,7 +1391,6 @@ mongo_cc_library(
          "//src/mongo/db:service_context",
          "//src/mongo/db/index_builds:index_builds_coordinator",
          "//src/mongo/db/query/write_ops",
@@ -367,7 +419,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/session:kill_sessions_local",
          "//src/mongo/db/session:session_catalog_mongod",
          "//src/mongo/db/shard_role/lock_manager",
-@@ -1962,7 +1961,6 @@ mongo_cc_unit_test(
+@@ -2069,7 +2068,6 @@ mongo_cc_unit_test(
          "//src/mongo/db/pipeline:change_stream_expired_pre_image_remover",
          "//src/mongo/db/query:command_request_response",
          "//src/mongo/db/repl/dbcheck:health_log",
@@ -375,7 +427,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/session:logical_session_id_helpers",
          "//src/mongo/db/shard_role",
          "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
-@@ -2194,7 +2192,6 @@ mongo_cc_unit_test(
+@@ -2396,7 +2394,6 @@ mongo_cc_unit_test(
          "//src/mongo/db:service_context_d_test_fixture",
          "//src/mongo/db/collection_crud",
          "//src/mongo/db/op_observer",
@@ -383,7 +435,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/session:session_catalog_mongod",
          "//src/mongo/db/transaction",
          "//src/mongo/executor:thread_pool_task_executor_test_fixture",
-@@ -2334,7 +2331,6 @@ mongo_cc_benchmark(
+@@ -2550,7 +2547,6 @@ mongo_cc_benchmark(
          "//src/mongo/db/op_observer:operation_logger_impl",
          "//src/mongo/db/query/client_cursor",
          "//src/mongo/db/rss:persistence_provider_impl",
@@ -391,7 +443,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/session:session_catalog_mongod",
          "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
          "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
-@@ -2391,7 +2387,6 @@ mongo_cc_benchmark(
+@@ -2610,7 +2606,6 @@ mongo_cc_benchmark(
          "//src/mongo/db/op_observer:operation_logger_transaction_proxy",
          "//src/mongo/db/op_observer:replica_set_write_block_op_observer",
          "//src/mongo/db/op_observer:user_write_block_mode_op_observer",
@@ -399,7 +451,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/storage:storage_options",
          "//src/mongo/db/timeseries:timeseries_op_observer",
          "//src/mongo/db/topology/cluster_parameters:cluster_server_parameter_op_observer",
-@@ -2422,7 +2417,6 @@ mongo_cc_benchmark(
+@@ -2641,7 +2636,6 @@ mongo_cc_benchmark(
          "//src/mongo/db/op_observer:operation_logger_impl",
          "//src/mongo/db/query/client_cursor",
          "//src/mongo/db/rss:persistence_provider_impl",
@@ -408,7 +460,7 @@ index de5a24d8..f85ee99b 100644
          "//src/mongo/db/shard_role/shard_catalog:catalog_helpers",
          "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
 diff --git a/src/mongo/db/s/resharding/BUILD.bazel b/src/mongo/db/s/resharding/BUILD.bazel
-index ec07bb54..ed7bbe7c 100644
+index ec07bb54e..ed7bbe7c5 100644
 --- a/src/mongo/db/s/resharding/BUILD.bazel
 +++ b/src/mongo/db/s/resharding/BUILD.bazel
 @@ -306,7 +306,6 @@ mongo_cc_benchmark(
@@ -428,10 +480,10 @@ index ec07bb54..ed7bbe7c 100644
      ],
  )
 diff --git a/src/mongo/db/service_entry_point_shard_role.cpp b/src/mongo/db/service_entry_point_shard_role.cpp
-index e296246b..b077ff4d 100644
+index 3f0a41b83..48bc6a11c 100644
 --- a/src/mongo/db/service_entry_point_shard_role.cpp
 +++ b/src/mongo/db/service_entry_point_shard_role.cpp
-@@ -2087,11 +2087,8 @@ bool ExecCommandDatabase::_awaitShardingInitializedIfNeeded(const Status& status
+@@ -2094,11 +2094,8 @@ bool ExecCommandDatabase::_awaitShardingInitializedIfNeeded(const Status& status
          return false;
      }
  
@@ -446,10 +498,10 @@ index e296246b..b077ff4d 100644
  }
  
 diff --git a/src/mongo/db/shard_role/BUILD.bazel b/src/mongo/db/shard_role/BUILD.bazel
-index d966f4e4..15efdcc6 100644
+index 913439b47..96bfe1c05 100644
 --- a/src/mongo/db/shard_role/BUILD.bazel
 +++ b/src/mongo/db/shard_role/BUILD.bazel
-@@ -104,7 +104,6 @@ mongo_cc_unit_test(
+@@ -105,7 +105,6 @@ mongo_cc_unit_test(
          "//src/mongo/db/admission/ticketing:ticketholder",
          "//src/mongo/db/collection_crud",
          "//src/mongo/db/query/client_cursor",
@@ -457,7 +509,7 @@ index d966f4e4..15efdcc6 100644
          "//src/mongo/db/shard_role/lock_manager:exception_util",
          "//src/mongo/db/shard_role/shard_catalog:allow_read_from_latest_on_secondary",
          "//src/mongo/db/shard_role/shard_catalog:catalog_control",
-@@ -155,7 +154,6 @@ mongo_cc_fuzztest(
+@@ -156,7 +155,6 @@ mongo_cc_fuzztest(
      deps = [
          ":shard_role_api_stor_ex",
          "//src/mongo/db/s:db_s_shard_server_test_deps",
@@ -466,7 +518,7 @@ index d966f4e4..15efdcc6 100644
      ],
  )
 diff --git a/src/mongo/db/sharding_environment/BUILD.bazel b/src/mongo/db/sharding_environment/BUILD.bazel
-index 10bae2de..a09d7863 100644
+index 10bae2ded..a09d78636 100644
 --- a/src/mongo/db/sharding_environment/BUILD.bazel
 +++ b/src/mongo/db/sharding_environment/BUILD.bazel
 @@ -243,7 +243,6 @@ mongo_cc_library(
@@ -478,7 +530,7 @@ index 10bae2de..a09d7863 100644
      ],
  )
 diff --git a/src/mongo/db/topology/cluster_parameters/BUILD.bazel b/src/mongo/db/topology/cluster_parameters/BUILD.bazel
-index 494c2068..696f5521 100644
+index 494c20683..696f5521b 100644
 --- a/src/mongo/db/topology/cluster_parameters/BUILD.bazel
 +++ b/src/mongo/db/topology/cluster_parameters/BUILD.bazel
 @@ -207,7 +207,6 @@ mongo_cc_unit_test(
@@ -490,7 +542,7 @@ index 494c2068..696f5521 100644
          "//src/mongo/db/sharding_environment:sharding_mongos_test_fixture",
          "//src/mongo/util:signal_handlers",
 diff --git a/src/mongo/db/ttl/BUILD.bazel b/src/mongo/db/ttl/BUILD.bazel
-index 2a2005e8..3ade7248 100644
+index 9b0ad9c06..f43463e5d 100644
 --- a/src/mongo/db/ttl/BUILD.bazel
 +++ b/src/mongo/db/ttl/BUILD.bazel
 @@ -43,7 +43,6 @@ mongo_cc_library(
@@ -502,7 +554,7 @@ index 2a2005e8..3ade7248 100644
          "//src/mongo/db/shard_role/ddl:coll_mod_command_idl",
          "//src/mongo/db/shard_role/ddl:index_commands_idl",
 diff --git a/src/mongo/dbtests/BUILD.bazel b/src/mongo/dbtests/BUILD.bazel
-index 58d2be19..bc8328d6 100644
+index 4958bed55..681734101 100644
 --- a/src/mongo/dbtests/BUILD.bazel
 +++ b/src/mongo/dbtests/BUILD.bazel
 @@ -23,7 +23,6 @@ mongo_cc_library(
@@ -513,53 +565,3 @@ index 58d2be19..bc8328d6 100644
          "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
          "//src/mongo/db/storage:storage_control",
          "//src/mongo/db/storage:storage_options",
---- a/src/mongo/db/BUILD.bazel
-+++ b/src/mongo/db/BUILD.bazel
-@@ -642,7 +642,6 @@
-         "//src/mongo/db/admission/ticketing:ticketholder",
-         "//src/mongo/db/collection_crud",
-         "//src/mongo/db/query/client_cursor",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/shard_role",
-         "//src/mongo/db/shard_role/lock_manager:exception_util",
-         "//src/mongo/db/shard_role/shard_catalog:catalog_control",
-@@ -2492,7 +2491,6 @@
-         "//src/mongo/db/repl:repl_server_parameters",
-         "//src/mongo/db/repl:replica_set_messages",
-         "//src/mongo/db/rss:disable_snapshotting_fail_point",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/session:session_catalog_mongod",
-         "//src/mongo/db/shard_role/lock_manager",
-         "//src/mongo/db/stats:api_version_metrics",
-@@ -3043,7 +3041,6 @@
-         "//src/mongo/db/repl:replmocks",
-         "//src/mongo/db/rss:persistence_provider_impl",
-         "//src/mongo/db/rss:service_lifecycle_impl",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
-         "//src/mongo/db/storage:storage_control",
-         "//src/mongo/db/storage:storage_options",
-@@ -3487,7 +3484,6 @@
-         "//src/mongo/db/repl:replmocks",
-         "//src/mongo/db/rss:persistence_provider_impl",
-         "//src/mongo/db/rss:service_lifecycle_impl",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
-         "//src/mongo/db/shard_role/shard_catalog:database_holder",
-         "//src/mongo/db/stats:top",
-@@ -3649,7 +3645,6 @@
-         "//src/mongo/db/repl:replmocks",
-         "//src/mongo/db/repl:storage_interface_impl",
-         "//src/mongo/db/rss/attached_storage:attached_persistence_provider",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
-         "//src/mongo/db/storage:storage_control",
-         "//src/mongo/db/storage/wiredtiger:storage_wiredtiger",
-@@ -3681,7 +3676,6 @@
-         "//src/mongo/db/repl:storage_interface_impl",
-         "//src/mongo/db/rss:persistence_provider_impl",
-         "//src/mongo/db/rss:service_lifecycle_impl",
--        "//src/mongo/db/s:sharding_runtime_d",
-         "//src/mongo/db/shard_role/shard_catalog:catalog_impl",
-         "//src/mongo/db/shard_role/shard_catalog:database_holder",
-         "//src/mongo/db/storage:storage_control",

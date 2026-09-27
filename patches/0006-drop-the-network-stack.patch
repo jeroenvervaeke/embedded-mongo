@@ -176,9 +176,9 @@
          ":transport_layer_mock",
          "//src/mongo:base",
 -        "//src/mongo/client:clientdriver_network",
+         "//src/mongo/db:commands",
          "//src/mongo/db:dbmessage",
          "//src/mongo/db:service_context_test_fixture",
-         "//src/mongo/db/admission:egress_response_rate_limiter",
 --- a/src/mongo/shell/BUILD.bazel
 +++ b/src/mongo/shell/BUILD.bazel
 @@ -151,7 +151,6 @@
@@ -262,8 +262,8 @@
          "//src/mongo/transport:session_manager",
 -        "//src/mongo/transport:transport_layer_manager",
          "//src/mongo/util:allocator_thread",
+         "//src/mongo/util/landlock",
          "//src/mongo/util:periodic_runner_factory",
-         "//src/mongo/util:signal_handlers",
 --- a/src/mongo/rpc/BUILD.bazel
 +++ b/src/mongo/rpc/BUILD.bazel
 @@ -247,7 +247,6 @@
@@ -763,7 +763,7 @@
          "//src/mongo/db:server_feature_flags",
          "//src/mongo/db/commands:list_collections_filter",
 @@ -100,7 +98,6 @@
-     deps = [
+         ":clean_shutdown_checker",
          ":initial_sync_cloners",
          ":repl_sync_shared_data",
 -        "//src/mongo/client:clientdriver_network",
